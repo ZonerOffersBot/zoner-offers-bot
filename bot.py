@@ -230,25 +230,35 @@ def subscriber_enabled(user_id):
     con = db()
     row = con.execute("SELECT enabled FROM subscribers WHERE user_id=?", (user_id,)).fetchone()
     con.close()
-    return bool(row["enabled"]) if row else False
+    # Notifications are ON by default for every new user. An explicit OFF
+    # choice is still respected because it is persisted in subscribers.
+    return bool(row["enabled"]) if row else True
 
 def get_offers(category=None, price_max=None, price_min=None, limit=20):
+    """Return only published offers, ordered by latest publication and filterable
+    by the saved category and numeric price."""
     con = db()
-    conditions = []
+    conditions = ["CAST(REPLACE(o.price, ',', '') AS REAL) > 0"]
     params = []
     if category:
-        conditions.append("category=?")
+        conditions.append("o.category=?")
         params.append(category)
-    conditions.append("CAST(REPLACE(price, ',', '') AS REAL) > 0")
     if price_min is not None:
-        conditions.append("CAST(REPLACE(price, ',', '') AS REAL) >= ?")
+        conditions.append("CAST(REPLACE(o.price, ',', '') AS REAL) >= ?")
         params.append(price_min)
     if price_max is not None:
-        conditions.append("CAST(REPLACE(price, ',', '') AS REAL) <= ?")
+        conditions.append("CAST(REPLACE(o.price, ',', '') AS REAL) <= ?")
         params.append(price_max)
     where = " WHERE " + " AND ".join(conditions)
     params.append(limit)
-    rows = con.execute("SELECT * FROM offers" + where + " ORDER BY id DESC LIMIT ?", params).fetchall()
+    rows = con.execute(
+        "SELECT o.* FROM offers o "
+        "JOIN (SELECT offer_id, MAX(published_at) AS last_published "
+        "      FROM publish_history GROUP BY offer_id) ph ON ph.offer_id=o.id"
+        + where +
+        " ORDER BY datetime(ph.last_published) DESC, o.id DESC LIMIT ?",
+        params
+    ).fetchall()
     con.close()
     return rows
 
@@ -560,6 +570,14 @@ def is_admin(update):
 async def start(update, context):
     user_id = update.effective_user.id
 
+    # Notifications default to ON. An explicit OFF choice is preserved.
+    con = db()
+    try:
+        con.execute("INSERT OR IGNORE INTO subscribers(user_id, enabled) VALUES (?, 1)", (user_id,))
+        con.commit()
+    finally:
+        con.close()
+
     # Show the channel-join screen on first start, but do NOT call Telegram
     # membership verification. This avoids the previous verification failures.
     if is_user_verified(user_id):
@@ -640,6 +658,14 @@ async def _button_handler_impl(update, context):
 
     if data == "check_join":
         user_id = query.from_user.id
+
+        # Notifications default to ON. Never overwrite an existing OFF choice.
+        con = db()
+        try:
+            con.execute("INSERT OR IGNORE INTO subscribers(user_id, enabled) VALUES (?, 1)", (user_id,))
+            con.commit()
+        finally:
+            con.close()
 
         # One-time join acknowledgement. We intentionally do not call
         # Telegram getChatMember here: that API was causing the previous
