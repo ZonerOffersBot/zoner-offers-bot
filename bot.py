@@ -31,9 +31,16 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
 # Telegram membership checks accept a numeric chat ID or @username, not a
 # t.me URL. Normalize common Render env-var formats once at startup.
 def _normalize_chat_ref(value):
-    value = (value or "").strip()
+    value = (value or "").strip().strip("'").strip('"').strip()
     if value.startswith(("https://t.me/", "http://t.me/")):
-        value = "@" + value.rstrip("/").split("/")[-1].split("?")[0]
+        tail = value.rstrip("/").split("/")[-1].split("?")[0]
+        # Public t.me/channel links can be converted to @username.
+        if tail and not tail.startswith("+"):
+            value = "@" + tail
+    if value.startswith("t.me/"):
+        tail = value.rstrip("/").split("/")[-1].split("?")[0]
+        if tail and not tail.startswith("+"):
+            value = "@" + tail
     return value
 
 CHANNEL_ID = _normalize_chat_ref(CHANNEL_ID)
@@ -322,9 +329,13 @@ async def membership_status(bot, user_id):
                      user_id, required_channel, status, is_member)
         return verified
     except Exception as exc:
-        # Never bypass verification when Telegram cannot answer.
-        log.warning("Force-join API check failed channel=%s user=%s: %s",
-                    required_channel, user_id, exc)
+        # Never bypass verification when Telegram cannot answer. Keep the
+        # failure visible in logs so a bad CHANNEL_ID / missing bot admin
+        # permission can be fixed instead of producing a silent false result.
+        log.warning(
+            "Force-join API check failed channel=%s user=%s: %s (%s)",
+            required_channel, user_id, exc, type(exc).__name__
+        )
         return False
 
 def join_gate_markup():
@@ -584,7 +595,10 @@ async def _button_handler_impl(update, context):
         except Exception as exc:
             log.exception("Join verification callback failed: %s", exc)
             await query.edit_message_text(
-                "⚠️ Verification check failed. Please tap Check Again.",
+                "⚠️ <b>Verification service could not check membership.</b>\n\n"
+                "Please ensure the bot is an <b>Administrator</b> in the required channel, "
+                "then tap <b>✅ I Joined — Check Again</b>.",
+                parse_mode=ParseMode.HTML,
                 reply_markup=join_gate_markup()
             )
             return
