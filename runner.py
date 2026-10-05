@@ -81,7 +81,7 @@ def build_app():
     app.add_error_handler(polling_error_handler)
     app.add_handler(CommandHandler("start", bot.start))
     app.add_handler(CommandHandler("help", bot.help_command))
-    app.add_handler(CommandHandler("admin", bot.admin_help))
+    app.add_handler(CommandHandler("admin", bot.admin_help))\n    app.add_handler(CommandHandler("setinterval", bot.set_interval_command))
     app.add_handler(CommandHandler("addmenu", bot.add_menu_item))
     app.add_handler(CommandHandler("testchannels", bot.test_channels))
     app.add_handler(conversation)
