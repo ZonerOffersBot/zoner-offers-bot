@@ -952,44 +952,31 @@ def generate_product_description(title, category, existing=""):
     label = CATEGORIES.get(category or "electronics", "🛍️ Product")
     return (f"{title} — a {label.lower()} product selected for this deal. Check the retailer page for the latest specifications, variants, stock and current price before checkout.")[:700]
 
-def generate_ai_product_image_url(title, category):
-    """Generate a product-specific anime/cartoon artwork URL."""
-    title = re.sub(r"\s+", " ", html.unescape(title or "")).strip()[:180]
-    category_label = CATEGORIES.get(category or "electronics", "🛍️ Product")
-    prompt = (
-        "Create a UNIQUE square anime + modern cartoon illustration of the SPECIFIC "
-        "product in this title, not a generic item. Product: " + title +
-        ". Category: " + category_label +
-        ". For electronics, clearly depict the exact device type named in the title "
-        "(earbuds, headphones, phone, laptop, smartwatch, keyboard, mouse, speaker, "
-        "monitor, charger, camera, controller, etc.) and make its form factor match "
-        "the title. Clean premium studio background. No people, no text, no fake price, "
-        "no discount text, no retailer/brand logo, no watermark, and do not copy an "
-        "exact copyrighted product photograph."
-    )
-    return (
-        "https://image.pollinations.ai/prompt/"
-        + quote_plus(prompt)
-        + "?width=1024&height=1024&nologo=true"
-    )
-
 def ensure_offer_image(row):
-    """Image is mandatory: use real product image, otherwise AI artwork."""
+    """Use only the real product image supplied by the shopping/retailer page."""
     image = (row["image_url"] or "").strip() if "image_url" in row.keys() else ""
-    if image:
+
+    # Never publish the old AI/cartoon artwork URLs.
+    if image and "image.pollinations.ai" not in image:
         return image, row
-    try:
-        image = fetch_product_image(row["url"])
-    except Exception as exc:
-        log.debug("Retailer image lookup failed for deal %s: %s", row["id"], exc)
+
+    # If the cached image was AI-generated, clear it. Discovery will replace it
+    # with the retailer's own product image before the offer becomes publishable.
+    if image and "image.pollinations.ai" in image:
         image = ""
+
     if not image:
-        image = generate_ai_product_image_url(
-            row["title"],
-            row["category"] or guess_category(f"{row['title']} {row['source']} {row['url']}")
-        )
+        # This function is normally called on cached metadata. A real retailer
+        # image must already be available; do not manufacture a replacement.
+        try:
+            image = fetch_product_image(row["url"])
+        except Exception as exc:
+            log.debug("Retailer image lookup failed for deal %s: %s", row["id"], exc)
+            image = ""
+
     if not image:
         return "", row
+
     con = db()
     try:
         con.execute("UPDATE offers SET image_url=? WHERE id=?", (image, row["id"]))
@@ -1172,13 +1159,13 @@ def normalize_candidate(source, title, url):
     }
 
 async def publish_offer(bot, row):
-    """Publish a cached deal with its real product image when available."""
+    """Publish a cached deal with the real shopping-platform product image only."""
     text = "🤖 <b>AI Deal Alert</b>\n\n" + offer_text(row)
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy / View Deal", url=row["url"])]])
     channel_published = False
 
-    # Image lookup is best-effort only. It runs independently from the
-    # publishing decision, and any failure falls back to the same text format.
+    # Only a real shopping-platform product image is allowed. If the
+    # retailer image is unavailable, do not publish a text-only/cartoon post.
     try:
         image_url, row = await asyncio.to_thread(ensure_offer_image, row)
     except Exception as exc:
@@ -1275,10 +1262,12 @@ async def scan_and_publish(bot, manual=False):
                     candidate["discount"] = extract_discount(meta_title) or candidate["discount"]
                     candidate["price"] = extract_price(meta_title) or candidate["price"]
                 candidate["description"] = generate_product_description(candidate["title"], candidate["category"], description)
+                # Real shopping-platform image is mandatory. If the retailer
+                # page does not expose one, skip this candidate instead of
+                # publishing cartoon/AI artwork.
                 if not image_url:
-                    image_url = generate_ai_product_image_url(
-                        candidate["title"], candidate["category"]
-                    )
+                    log.info("Skipping candidate without retailer product image: %s", candidate["url"])
+                    continue
                 oid = insert_offer(
                     candidate["title"], candidate["price"], candidate["old_price"],
                     candidate["category"], candidate["url"], candidate["source"],
@@ -1290,7 +1279,7 @@ async def scan_and_publish(bot, manual=False):
                 if new_count >= 20:
                     break
             set_setting_sync("last_discovery_at", str(now_ts))
-            log.info("🆕 Discovery cycle cached %s new product links (images best-effort)", new_count)
+            log.info("🆕 Discovery cycle cached %s new product links with retailer images", new_count)
         except Exception:
             log.exception("New product discovery failed; cached publishing will continue")
 
@@ -1300,7 +1289,8 @@ async def scan_and_publish(bot, manual=False):
     row = get_cached_offer_for_publish()
 
     # If the cache has no data yet, seed it from the built-in shopping links.
-    # These are static fallback links, not live scraped data.
+    # These fallback pages are only eligible after a real retailer image is
+    # fetched; no AI/cartoon image is ever generated.
     if row is None:
         fallback_pool = list(FALLBACK_PRODUCTS)
         offset = datetime.now(timezone.utc).minute % len(fallback_pool)
@@ -1311,9 +1301,7 @@ async def scan_and_publish(bot, manual=False):
                 candidate["title"], candidate["price"], candidate["old_price"],
                 candidate["category"], candidate["url"], candidate["source"],
                 candidate["discount"], candidate["score"],
-                image_url=generate_ai_product_image_url(
-                    candidate["title"], candidate["category"]
-                ),
+                image_url="",
                 description=generate_product_description(
                     candidate["title"], candidate["category"]
                 )
