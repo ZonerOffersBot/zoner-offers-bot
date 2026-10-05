@@ -57,5 +57,5 @@ def build_force_join_keyboard(channels, buttons_per_row=2):
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("✅ Maine join kar liya", callback_data="verify_join")])
+    keyboard.append([InlineKeyboardButton("✅ Maine join kar liya", callback_data="check_join")])
     return InlineKeyboardMarkup(keyboard)
