@@ -126,6 +126,7 @@ def init_db():
         discount INTEGER DEFAULT 0,
         score INTEGER DEFAULT 0,
         fingerprint TEXT UNIQUE,
+        image_url TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""")
     con.execute("""CREATE TABLE IF NOT EXISTS subscribers (
@@ -152,6 +153,7 @@ def init_db():
         ("discount", "ALTER TABLE offers ADD COLUMN discount INTEGER DEFAULT 0"),
         ("score", "ALTER TABLE offers ADD COLUMN score INTEGER DEFAULT 0"),
         ("fingerprint", "ALTER TABLE offers ADD COLUMN fingerprint TEXT"),
+        ("image_url", "ALTER TABLE offers ADD COLUMN image_url TEXT DEFAULT ''"),
     ]:
         if name not in existing:
             try:
@@ -833,20 +835,63 @@ async def cancel(update, context):
     await update.message.reply_text("❌ <b>Cancelled.</b>", parse_mode=ParseMode.HTML, reply_markup=admin_menu() if is_admin(update) else None)
     return ConversationHandler.END
 
-def insert_offer(title, price, old_price, category, url, source, discount, score):
+def insert_offer(title, price, old_price, category, url, source, discount, score, image_url=""):
     # Category is mandatory for every stored/published link.
     category = category or guess_category(f"{title} {source} {url}") or "electronics"
     fp = fingerprint(title, url)
     con = db()
     try:
-        cur = con.execute("""INSERT INTO offers(title,price,old_price,category,url,source,discount,score,fingerprint)
-                             VALUES (?,?,?,?,?,?,?,?,?)""",
-                          (title,price,old_price,category,url,source,discount,score,fp))
+        cur = con.execute("""INSERT INTO offers(title,price,old_price,category,url,source,discount,score,fingerprint,image_url)
+                             VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                          (title,price,old_price,category,url,source,discount,score,fp,image_url or ""))
         con.commit(); return cur.lastrowid
     except sqlite3.IntegrityError:
         return None
     finally:
         con.close()
+
+def fetch_product_image(url):
+    """Best-effort product image discovery; image failure can never block publishing."""
+    try:
+        r = requests.get(
+            url, timeout=4, allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; ZonerOffersBot/1.0)"}
+        )
+        if not r.ok:
+            return ""
+        soup = BeautifulSoup(r.text, "html.parser")
+        for attrs in (
+            {"property": "og:image"},
+            {"property": "og:image:url"},
+            {"name": "twitter:image"},
+            {"name": "twitter:image:src"},
+        ):
+            tag = soup.find("meta", attrs=attrs)
+            value = (tag.get("content") or "").strip() if tag else ""
+            if value:
+                image = value if value.startswith(("http://", "https://")) else requests.compat.urljoin(r.url, value)
+                host = (urlparse(image).hostname or "").lower()
+                if host and urlparse(image).scheme in {"http", "https"}:
+                    return image[:2000]
+    except Exception as exc:
+        log.debug("Product image lookup failed for %s: %s", url, exc)
+    return ""
+
+def ensure_offer_image(row):
+    """Fill a missing cached image once; never fail the publish cycle."""
+    image = (row["image_url"] or "").strip() if "image_url" in row.keys() else ""
+    if image:
+        return image, row
+    image = fetch_product_image(row["url"])
+    if not image:
+        return "", row
+    con = db()
+    try:
+        con.execute("UPDATE offers SET image_url=? WHERE id=?", (image, row["id"]))
+        con.commit()
+    finally:
+        con.close()
+    return image, get_offer(row["id"])
 
 def get_offer_by_fingerprint(fp):
     con = db()
@@ -1022,10 +1067,41 @@ def normalize_candidate(source, title, url):
     }
 
 async def publish_offer(bot, row):
-    """Publish a cached deal to every configured channel and subscribers."""
+    """Publish a cached deal with its real product image when available."""
     text = "🤖 <b>AI Deal Alert</b>\n\n" + offer_text(row)
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy / View Deal", url=row["url"])]])
     channel_published = False
+
+    # Image lookup is best-effort only. It runs independently from the
+    # publishing decision, and any failure falls back to the same text format.
+    try:
+        image_url, row = await asyncio.to_thread(ensure_offer_image, row)
+    except Exception as exc:
+        log.warning("Image enrichment failed for deal %s: %s", row["id"], exc)
+        image_url = ""
+
+    async def send_deal(chat_id):
+        if image_url:
+            try:
+                await bot.send_photo(
+                    chat_id=chat_id, photo=image_url, caption=text,
+                    parse_mode=ParseMode.HTML, reply_markup=markup,
+                    read_timeout=8, write_timeout=8
+                )
+                return True
+            except Exception as exc:
+                log.warning("Photo publish failed for %s to %s; falling back to text: %s",
+                            row["id"], chat_id, exc)
+        try:
+            await bot.send_message(
+                chat_id=chat_id, text=text, parse_mode=ParseMode.HTML,
+                reply_markup=markup, disable_web_page_preview=False,
+                read_timeout=8, write_timeout=8
+            )
+            return True
+        except Exception as exc:
+            log.warning("Text publish failed for %s to %s: %s", row["id"], chat_id, exc)
+            return False
 
     if AUTO_POST:
         # Publishing is the first priority. One channel failure never stops
@@ -1034,22 +1110,19 @@ async def publish_offer(bot, row):
             posted = False
             for attempt in range(3):
                 try:
-                    await bot.send_message(
-                        chat_id=channel, text=text, parse_mode=ParseMode.HTML,
-                        reply_markup=markup, disable_web_page_preview=False,
-                        read_timeout=8, write_timeout=8
-                    )
-                    log.info("✅ Published deal %s to channel %s", row["id"], channel)
-                    channel_published = True
-                    posted = True
-                    break
+                    if await send_deal(channel):
+                        log.info("✅ Published deal %s to channel %s%s",
+                                 row["id"], channel, " with image" if image_url else "")
+                        channel_published = True
+                        posted = True
+                        break
                 except Exception as exc:
                     log.warning(
                         "Channel post failed for %s (attempt %s/3): %s",
                         channel, attempt + 1, exc
                     )
-                    if attempt < 2:
-                        await asyncio.sleep(1)
+                if attempt < 2:
+                    await asyncio.sleep(1)
             if not posted:
                 log.error("❌ Could not publish deal %s to %s", row["id"], channel)
 
@@ -1059,11 +1132,7 @@ async def publish_offer(bot, row):
     con.close()
     for user in users:
         try:
-            await bot.send_message(
-                chat_id=user["user_id"], text=text, parse_mode=ParseMode.HTML,
-                reply_markup=markup, disable_web_page_preview=False,
-                read_timeout=8, write_timeout=8
-            )
+            await send_deal(user["user_id"])
         except Exception as exc:
             log.warning("Subscriber notification failed for %s: %s", user["user_id"], exc)
 
