@@ -82,6 +82,7 @@ def build_app():
     app.add_handler(CommandHandler("start", bot.start))
     app.add_handler(CommandHandler("help", bot.help_command))
     app.add_handler(CommandHandler("admin", bot.admin_help))
+    app.add_handler(CommandHandler("addmenu", bot.add_menu_item))
     app.add_handler(CommandHandler("testchannels", bot.test_channels))
     app.add_handler(conversation)
     app.add_handler(CallbackQueryHandler(bot.button_handler))
