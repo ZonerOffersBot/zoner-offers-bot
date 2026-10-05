@@ -503,9 +503,9 @@ async def _button_handler_impl(update, context):
             )
         except Exception as exc:
             log.exception("Join verification callback failed: %s", exc)
-            await query.answer(
-                "Verification is temporarily unavailable. Please try again.",
-                show_alert=True
+            await query.edit_message_text(
+                "⚠️ Verification check failed. Please tap Check Again.",
+                reply_markup=join_gate_markup()
             )
             return
 
