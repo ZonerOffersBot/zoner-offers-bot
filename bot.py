@@ -35,7 +35,7 @@ GROUP_URL = os.getenv("GROUP_URL", "")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
 CHANNEL_URL = "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
-SCAN_SECONDS = 120  # scan every 2 minutes
+SCAN_SECONDS = 90  # publish on a 90-second cycle; channel publishing is highest priority
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 AUTO_POST = True  # Channel publishing is the bot's highest-priority job.
 
