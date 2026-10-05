@@ -41,9 +41,22 @@ async def fast_membership_status(telegram_bot, user_id):
 bot.membership_status = fast_membership_status
 
 async def polling_error_handler(update, context):
-    # Never let a Telegram polling/handler exception silently kill the bot.
+    # Log the full exception, but also give the user a visible recovery path.
+    # Handler exceptions must never make the bot appear unresponsive.
     exc = context.error
     log.error("Telegram runtime error: %r", exc, exc_info=exc)
+    try:
+        if update and update.callback_query:
+            try:
+                await update.callback_query.answer("Temporary error — please try again.", show_alert=True)
+            except Exception:
+                pass
+        elif update and update.effective_message:
+            await update.effective_message.reply_text(
+                "⚠️ Temporary error. The bot is still running — please try again."
+            )
+    except Exception:
+        log.exception("Could not send runtime-error recovery message")
 
 
 async def managed_post_init(app):
