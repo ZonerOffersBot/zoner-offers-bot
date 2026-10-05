@@ -17,6 +17,10 @@ services:
         sync: false
       - key: CHANNEL_ID
         sync: false
+      - key: CHANNEL_URL
+        value: https://t.me/zoneroffers
+      - key: DB_FILE
+        sync: false
       - key: GROUP_ID
         sync: false
       - key: GROUP_URL
