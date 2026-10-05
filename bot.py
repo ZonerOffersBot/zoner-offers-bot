@@ -119,6 +119,10 @@ def init_db():
         user_id INTEGER PRIMARY KEY,
         enabled INTEGER NOT NULL DEFAULT 1
     )""")
+    con.execute("""CREATE TABLE IF NOT EXISTS verified_users (
+        user_id INTEGER PRIMARY KEY,
+        verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
     # Migrate old databases created by the MVP.
     existing = {r["name"] for r in con.execute("PRAGMA table_info(offers)").fetchall()}
     for name, ddl in [
@@ -132,6 +136,18 @@ def init_db():
                 con.execute(ddl)
             except sqlite3.OperationalError:
                 pass
+    con.commit()
+    con.close()
+
+def is_user_verified(user_id):
+    con = db()
+    row = con.execute("SELECT 1 FROM verified_users WHERE user_id=?", (user_id,)).fetchone()
+    con.close()
+    return row is not None
+
+def mark_user_verified(user_id):
+    con = db()
+    con.execute("INSERT OR IGNORE INTO verified_users(user_id) VALUES (?)", (user_id,))
     con.commit()
     con.close()
 
@@ -223,8 +239,12 @@ _membership_cache = {}
 MEMBERSHIP_CACHE_SECONDS = 300
 
 async def membership_status(bot, user_id):
-    # Cache verification briefly so every button click does not make multiple
-    # Telegram API calls. The two required channels are checked concurrently.
+    # One-time verification: once a user has successfully joined, do not ask
+    # Telegram again on every /start or button click.
+    if is_user_verified(user_id):
+        return True
+
+    # Cache failed verification briefly so Telegram is not spammed.
     now = asyncio.get_running_loop().time()
     cached = _membership_cache.get(user_id)
     if cached and now - cached[0] < MEMBERSHIP_CACHE_SECONDS:
@@ -248,6 +268,8 @@ async def membership_status(bot, user_id):
     checks = await asyncio.gather(*(check(chat_id, label) for chat_id, label in required))
     result = bool(checks) and all(checks)
     _membership_cache[user_id] = (now, result)
+    if result:
+        mark_user_verified(user_id)
     return result
 
 def join_gate_markup():
@@ -326,6 +348,14 @@ def is_admin(update):
 async def start(update, context):
     user_id = update.effective_user.id
 
+    # Verified users never see the join gate again.
+    if is_user_verified(user_id):
+        await update.message.reply_text(
+            "🔥 <b>Welcome back to Zoner Offers AI!</b>\n\n👇 Choose an option:",
+            parse_mode=ParseMode.HTML, reply_markup=main_menu(user_id)
+        )
+        return
+
     # Reply immediately before membership/API checks so /start never appears dead.
     status_msg = await update.message.reply_text(
         "⚡ <b>Opening Zoner Offers AI…</b>", parse_mode=ParseMode.HTML
@@ -383,6 +413,7 @@ async def button_handler(update, context):
 
     if data == "check_join":
         if await membership_status(context.bot, query.from_user.id):
+            mark_user_verified(query.from_user.id)
             await query.edit_message_text(
                 "✅ <b>Membership verified!</b>\n\n🔥 Welcome to Zoner Offers AI. Choose an option:",
                 parse_mode=ParseMode.HTML, reply_markup=main_menu(query.from_user.id))
@@ -390,9 +421,10 @@ async def button_handler(update, context):
             await query.answer("Please join the required channel/group first.", show_alert=True)
         return
 
-    if not await membership_status(context.bot, query.from_user.id):
-        await query.edit_message_text(join_gate_text(), parse_mode=ParseMode.HTML, reply_markup=join_gate_markup())
-        return
+    if not is_user_verified(query.from_user.id):
+        if not await membership_status(context.bot, query.from_user.id):
+            await query.edit_message_text(join_gate_text(), parse_mode=ParseMode.HTML, reply_markup=join_gate_markup())
+            return
 
     if data == "offers": await show_offers(update); return
     if data == "categories":
