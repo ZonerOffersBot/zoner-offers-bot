@@ -116,7 +116,7 @@ def run():
     bot.Thread(target=bot.run_health_server, daemon=True).start()
     app = build_app()
     log.info("🔥 Zoner Offers AI fast runner is starting.")
-    app.run_polling(poll_interval=0.0, timeout=10, bootstrap_retries=-1)
+    app.run_polling(poll_interval=0.5, timeout=20, bootstrap_retries=-1, drop_pending_updates=False)
 
 if __name__ == "__main__":
     run()
