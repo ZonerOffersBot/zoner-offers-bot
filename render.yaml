@@ -1,13 +1,17 @@
 services:
   - type: web
-    name: zoner-offers-bot
+    name: telegram-deal-bot
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python runner.py
-    healthCheckPath: /
+    startCommand: python main.py
+    healthCheckPath: /health
     envVars:
       - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: ADMIN_IDS
         sync: false
       - key: ADMIN_ID
         sync: false
@@ -24,6 +28,8 @@ services:
       - key: AUTO_POST
         value: "1"
       - key: SCAN_SECONDS
-        value: "90"
+        value: "120"
       - key: MIN_DEAL_SCORE
         value: "45"
+      - key: PYTHON_VERSION
+        value: "3.11.9"
