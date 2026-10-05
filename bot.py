@@ -215,8 +215,6 @@ def main_menu(user_id=None):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🛍️ Latest Deals", callback_data="offers"), InlineKeyboardButton("🏷️ Categories", callback_data="categories")],
         [InlineKeyboardButton(notify, callback_data="notifications")],
-        [InlineKeyboardButton("📢 Join Channel 1", url=CHANNEL_URL)],
-        [InlineKeyboardButton("📢 Join Channel 2", url=SECOND_CHANNEL_URL)],
         [InlineKeyboardButton("🤖 AI Deal Hunter", callback_data="ai_info")],
         [InlineKeyboardButton("🆘 Help", callback_data="help")],
     ])
