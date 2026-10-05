@@ -260,7 +260,8 @@ def score_deal(title, discount, source):
     return min(score, 100)
 
 _membership_cache = {}
-MEMBERSHIP_CACHE_SECONDS = 300
+# Failed membership checks are never cached; users can join and retry immediately.
+MEMBERSHIP_CACHE_SECONDS = 0
 
 async def membership_status(bot, user_id):
     # One-time verification: once a user has successfully joined, do not ask
@@ -268,11 +269,9 @@ async def membership_status(bot, user_id):
     if is_user_verified(user_id):
         return True
 
-    # Cache failed verification briefly so Telegram is not spammed.
+    # Always perform a fresh check until the user is successfully verified.
+    # This prevents a failed check before joining from blocking the user for minutes.
     now = asyncio.get_running_loop().time()
-    cached = _membership_cache.get(user_id)
-    if cached and now - cached[0] < MEMBERSHIP_CACHE_SECONDS:
-        return cached[1]
 
     required = [
         ("@zoneroffers", "channel 1"),
@@ -291,9 +290,13 @@ async def membership_status(bot, user_id):
 
     checks = await asyncio.gather(*(check(chat_id, label) for chat_id, label in required))
     result = bool(checks) and all(checks)
-    _membership_cache[user_id] = (now, result)
     if result:
+        # Lifetime verification: future /start and buttons skip the join gate.
         mark_user_verified(user_id)
+        _membership_cache[user_id] = (now, True)
+    else:
+        # Never cache failures; the user may have just joined.
+        _membership_cache.pop(user_id, None)
     return result
 
 def join_gate_markup():
@@ -306,10 +309,10 @@ def join_gate_markup():
 
 def join_gate_text():
     return (
-        "🔐 <b>Join Required</b>\\n\\n"
+        "🔐 <b>Join Required</b>\n\n"
         "Zoner Offers AI use karne se pehle hamare <b>channel</b>"
         + (" <b>aur group</b>" if GROUP_ID else "")
-        + " ko join karein.\\n\\n"
+        + " ko join karein.\n\n"
         "Dono required channels/group join karne ke baad <b>✅ I Joined — Check Again</b> dabayein."
     )
 
@@ -412,9 +415,9 @@ async def start(update, context):
             return
 
         await status_msg.edit_text(
-            "🔥 <b>Welcome to Zoner Offers AI!</b>\\n\\n"
-            "🤖 AI-style deal discovery\\n💸 Discounts & price drops\\n🔔 Smart deal alerts\\n"
-            "🌐 Multiple shopping sources\\n\\n👇 Choose an option:",
+            "🔥 <b>Welcome to Zoner Offers AI!</b>\n\n"
+            "🤖 AI-style deal discovery\n💸 Discounts & price drops\n🔔 Smart deal alerts\n"
+            "🌐 Multiple shopping sources\n\n👇 Choose an option:",
             parse_mode=ParseMode.HTML, reply_markup=main_menu(user_id)
         )
     except Exception as exc:
@@ -482,13 +485,42 @@ async def _button_handler_impl(update, context):
     data = query.data
 
     if data == "check_join":
-        if await membership_status(context.bot, query.from_user.id):
-            mark_user_verified(query.from_user.id)
+        user_id = query.from_user.id
+
+        # Lifetime verification fast-path.
+        if is_user_verified(user_id):
+            await query.edit_message_text(
+                "🔥 <b>Welcome back to Zoner Offers AI!</b>\n\n👇 Choose an option:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(user_id)
+            )
+            return
+
+        # Always re-check Telegram immediately; failed checks are not cached.
+        try:
+            verified = await asyncio.wait_for(
+                membership_status(context.bot, user_id), timeout=6.0
+            )
+        except Exception as exc:
+            log.exception("Join verification callback failed: %s", exc)
+            await query.answer(
+                "Verification is temporarily unavailable. Please try again.",
+                show_alert=True
+            )
+            return
+
+        if verified:
+            mark_user_verified(user_id)
             await query.edit_message_text(
                 "✅ <b>Membership verified!</b>\n\n🔥 Welcome to Zoner Offers AI. Choose an option:",
-                parse_mode=ParseMode.HTML, reply_markup=main_menu(query.from_user.id))
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(user_id)
+            )
         else:
-            await query.answer("Please join the required channel/group first.", show_alert=True)
+            await query.answer(
+                "Please join BOTH required channels, then press Check Again.",
+                show_alert=True
+            )
         return
 
     # Once verified, this Telegram account is allowed through without another join gate.
