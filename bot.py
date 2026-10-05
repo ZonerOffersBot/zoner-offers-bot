@@ -188,9 +188,17 @@ def score_deal(title, discount, source):
     if source.lower() in {"amazon", "flipkart"}: score += 10
     return min(score, 100)
 
+_membership_cache = {}
+MEMBERSHIP_CACHE_SECONDS = 30
+
 async def membership_status(bot, user_id):
-    # Both public channels are mandatory. An optional configured group is
-    # also mandatory when GROUP_ID is set.
+    # Cache verification briefly so every button click does not make multiple
+    # Telegram API calls. The two required channels are checked concurrently.
+    now = asyncio.get_running_loop().time()
+    cached = _membership_cache.get(user_id)
+    if cached and now - cached[0] < MEMBERSHIP_CACHE_SECONDS:
+        return cached[1]
+
     required = [
         ("@zoneroffers", "channel 1"),
         ("@offerleloturant", "channel 2"),
@@ -198,15 +206,18 @@ async def membership_status(bot, user_id):
     if GROUP_ID:
         required.append((GROUP_ID, "group"))
 
-    checks = []
-    for chat_id, label in required:
+    async def check(chat_id, label):
         try:
             member = await bot.get_chat_member(chat_id, user_id)
-            checks.append(member.status in {"member", "administrator", "creator"})
+            return member.status in {"member", "administrator", "creator"}
         except Exception as exc:
             log.warning("Membership check failed for %s (%s): %s", label, chat_id, exc)
-            checks.append(False)
-    return bool(checks) and all(checks)
+            return False
+
+    checks = await asyncio.gather(*(check(chat_id, label) for chat_id, label in required))
+    result = bool(checks) and all(checks)
+    _membership_cache[user_id] = (now, result)
+    return result
 
 def join_gate_markup():
     rows = [[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_URL)]]
