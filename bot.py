@@ -303,7 +303,14 @@ MEMBERSHIP_CACHE_SECONDS = 0
 
 def required_channel_ref():
     ref = _normalize_chat_ref(CHANNEL_ID)
-    return ref or "@zoneroffers"
+    # A +invite link is not a valid Telegram chat_id for get_chat_member.
+    # Fall back to the public required channel instead of making every user
+    # fail verification because of a malformed Render env value.
+    if not ref or ref.startswith(("https://", "http://", "t.me/")) or ref.startswith("+"):
+        if ref:
+            log.error("Invalid CHANNEL_ID for membership API: %r; using @zoneroffers", ref)
+        return "@zoneroffers"
+    return ref
 
 def required_channel_url():
     ref = required_channel_ref()
