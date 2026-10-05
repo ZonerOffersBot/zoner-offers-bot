@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import bot
+
+# Render redeploy marker: interval command registration is syntax-fixed.
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
 
 log = logging.getLogger("zoner")
