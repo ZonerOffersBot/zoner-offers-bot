@@ -1065,7 +1065,12 @@ async def publish_offer(bot, row):
                 read_timeout=8, write_timeout=8
             )
         except Exception as exc:
-            logasync def scan_and_publish(bot, manual=False):
+            log.warning("Subscriber notification failed for %s: %s", user["user_id"], exc)
+
+    return channel_published
+
+
+async def scan_and_publish(bot, manual=False):
     """Publish one cached/cached-old deal every cycle without live scraping.
 
     Data may be up to 2 hours old (or older when the cache is exhausted).
@@ -1128,7 +1133,10 @@ async def publish_offer(bot, row):
         skipped = 1
         log.warning("No configured channel accepted deal id=%s; keeping scheduler alive", row["id"])
 
-    return f"Addedasync def auto_scan_loop(app):
+    return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: 1"
+
+
+async def auto_scan_loop(app):
     """Single production publishing loop with admin-configurable interval.
 
     The runner starts only this loop, preventing duplicate APScheduler jobs.
@@ -1151,6 +1159,7 @@ async def publish_offer(bot, row):
 
         elapsed = asyncio.get_running_loop().time() - cycle_started
         await asyncio.sleep(max(1.0, interval - elapsed))
+
 
 async def add_menu_item(update, context):
     """Admin-only: add a custom main-menu item.
