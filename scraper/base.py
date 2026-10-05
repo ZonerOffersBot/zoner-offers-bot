@@ -49,3 +49,23 @@ def safe_select(soup, selector, attr=None, default="N/A"):
         return element.get_text(" ", strip=True) or default
     except Exception:
         return default
+
+
+def soup_from_html(html):
+    """Convert fetched HTML into BeautifulSoup or return None for empty pages."""
+    if not html:
+        return None
+    try:
+        return BeautifulSoup(html, "html.parser")
+    except Exception as exc:
+        logger.warning("HTML parse failed: %s", exc)
+        return None
+
+def clean_text(element, default=""):
+    """Safely extract normalized text from a BeautifulSoup element."""
+    if element is None:
+        return default
+    try:
+        return element.get_text(" ", strip=True) or default
+    except Exception:
+        return default
