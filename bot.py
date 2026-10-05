@@ -896,28 +896,66 @@ async def scan_and_publish(bot, manual=False):
         log.info("Using guaranteed fallback shopping link for %s", source)
 
     if selected:
-        oid = insert_offer(
-            selected["title"], selected["price"], selected["old_price"],
-            selected["category"], selected["url"], selected["source"],
-            selected["discount"], selected["score"]
-        )
-        if oid:
-            row = get_offer(oid)
-            await publish_offer(bot, row)
-            added = 1
-        elif fallback_used:
-            # A fallback URL may already exist; republish the existing valid
-            # shopping link rather than breaking the 2-minute posting promise.
-            con = db()
-            row = con.execute("SELECT * FROM offers WHERE url=? ORDER BY id DESC LIMIT 1", (selected["url"],)).fetchone()
-            con.close()
-            if row:
+        # Validate the actual destination before saving/publishing. Broken,
+        # blocked, malformed, or non-HTTP destinations are skipped and the
+        # scanner can try another candidate instead.
+        async def url_ok(url):
+            try:
+                parsed = urlparse(url)
+                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                    return False
+                def probe():
+                    try:
+                        resp = requests.head(url, allow_redirects=True, timeout=5,
+                                             headers={"User-Agent": "Mozilla/5.0"})
+                        if resp.status_code < 400:
+                            return True
+                        if resp.status_code in {405, 403}:
+                            resp = requests.get(url, allow_redirects=True, timeout=5,
+                                                stream=True,
+                                                headers={"User-Agent": "Mozilla/5.0"})
+                            return resp.status_code < 400
+                        return False
+                    except requests.RequestException:
+                        return False
+                return await asyncio.to_thread(probe)
+            except Exception:
+                return False
+
+        if not await url_ok(selected["url"]):
+            log.warning("Skipping broken/unreachable deal URL: %s", selected["url"])
+            # Try the next fresh candidate, then fallbacks.
+            alternatives = [x for x in fresh if x["url"] != selected["url"]]
+            selected = None
+            for candidate in alternatives:
+                if await url_ok(candidate["url"]):
+                    selected = candidate
+                    fallback_used = False
+                    break
+
+        if selected:
+            oid = insert_offer(
+                selected["title"], selected["price"], selected["old_price"],
+                selected["category"], selected["url"], selected["source"],
+                selected["discount"], selected["score"]
+            )
+            if oid:
+                row = get_offer(oid)
                 await publish_offer(bot, row)
                 added = 1
+            elif fallback_used:
+                # Only republish an existing fallback after its URL passed
+                # validation; never publish a broken fallback.
+                con = db()
+                row = con.execute("SELECT * FROM offers WHERE url=? ORDER BY id DESC LIMIT 1", (selected["url"],)).fetchone()
+                con.close()
+                if row:
+                    await publish_offer(bot, row)
+                    added = 1
+                else:
+                    skipped += 1
             else:
                 skipped += 1
-        else:
-            skipped += 1
 
     return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: {len(candidates)}"
 
