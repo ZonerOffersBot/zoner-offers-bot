@@ -1,8 +1,8 @@
-python-telegram-bot[job-queue]==22.5
-aiosqlite
-httpx
-beautifulsoup4==4.14.2
-selenium
-apscheduler
-python-dotenv
-requests==2.32.5
+python-telegram-bot[webhooks,job-queue]==21.9
+uvicorn==0.34.0
+starlette==0.45.3
+apscheduler==3.10.4
+aiosqlite==0.20.0
+httpx==0.28.1
+beautifulsoup4==4.12.3
+python-dotenv==1.0.1
