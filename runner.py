@@ -16,7 +16,7 @@ async def fast_membership_status(telegram_bot, user_id):
 
     async def check(chat_id, label):
         try:
-            member = await asyncio.wait_for(telegram_bot.get_chat_member(chat_id, user_id), timeout=4.0)
+            member = await asyncio.wait_for(telegram_bot.get_chat_member(chat_id, user_id), timeout=2.0)
             return member.status in {"member", "administrator", "creator"}
         except Exception as exc:
             log.warning("Fast membership check failed for %s: %s", label, exc)
@@ -51,8 +51,8 @@ def build_app():
         .token(bot.TOKEN)
         .connection_pool_size(32)
         .pool_timeout(3)
-        .get_updates_connection_pool_size(4)
-        .get_updates_pool_timeout(3)
+        .get_updates_connection_pool_size(8)
+        .get_updates_pool_timeout(2)
         .get_updates_connect_timeout(5)
         .post_init(managed_post_init)
         .post_stop(managed_post_stop)
@@ -87,7 +87,7 @@ def run():
     bot.Thread(target=bot.run_health_server, daemon=True).start()
     app = build_app()
     log.info("🔥 Zoner Offers AI fast runner is starting.")
-    app.run_polling(poll_interval=0.0, timeout=5, bootstrap_retries=3)
+    app.run_polling(poll_interval=0.0, timeout=3, bootstrap_retries=3)
 
 if __name__ == "__main__":
     run()
