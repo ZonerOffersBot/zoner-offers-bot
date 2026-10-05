@@ -273,6 +273,7 @@ def offer_markup(row, back="offers"):
 def admin_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🤖 Scan Deals Now", callback_data="admin_scan"), InlineKeyboardButton("➕ Add Offer", callback_data="admin_add")],
+        [InlineKeyboardButton("🧪 Test Channel Posting", callback_data="admin_testchannels")],
         [InlineKeyboardButton("📋 Offers", callback_data="admin_offers"), InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
         [InlineKeyboardButton("🏠 Main Menu", callback_data="back")],
     ])
@@ -359,6 +360,24 @@ async def button_handler(update, context):
     if data.startswith("admin_"):
         if not is_admin(update):
             await query.answer("Not authorized.", show_alert=True); return
+        if data == "admin_testchannels":
+            await query.edit_message_text("🧪 <b>Testing channel posting…</b>", parse_mode=ParseMode.HTML)
+            lines = ["🧪 <b>Channel posting test</b>"]
+            for channel in POST_CHANNELS:
+                try:
+                    chat = await context.bot.get_chat(channel)
+                    member = await context.bot.get_chat_member(chat.id, context.bot.id)
+                    status = getattr(member, "status", "unknown")
+                    rights = getattr(member, "can_post_messages", None)
+                    lines.append(f"\\n<b>{html.escape(channel)}</b>\\nChat: <code>{chat.id}</code>\\nBot: <code>{html.escape(str(status))}</code>\\nCan post: <code>{html.escape(str(rights))}</code>")
+                    msg = await context.bot.send_message(chat.id, "🧪 <b>Zoner Offers AI test</b>\\n\\nPosting works. ✅", parse_mode=ParseMode.HTML)
+                    lines.append(f"✅ Sent message <code>{msg.message_id}</code>")
+                except Exception as exc:
+                    log.exception("Channel diagnostic failed for %s", channel)
+                    lines.append(f"❌ <code>{html.escape(type(exc).__name__)}: {html.escape(str(exc))}</code>")
+            await query.message.reply_text("\\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+            return
+
         if data == "admin_add":
             await query.message.reply_text("➕ <b>Add Offer</b>\n\nUse /addoffer for the manual fallback form.", parse_mode=ParseMode.HTML); return
         if data == "admin_scan":
