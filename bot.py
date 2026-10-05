@@ -388,10 +388,16 @@ def offer_markup(row, back="offers"):
 
 def admin_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🤖 Scan Deals Now", callback_data="admin_scan"), InlineKeyboardButton("➕ Add Offer", callback_data="admin_add")],
-        [InlineKeyboardButton("🧪 Test Channel Posting", callback_data="admin_testchannels")],
-        [InlineKeyboardButton("📋 Offers", callback_data="admin_offers"), InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
-        [InlineKeyboardButton("🏠 Main Menu", callback_data="back")],
+        [InlineKeyboardButton("📢 Force Join Channels", callback_data="admin_force"),
+         InlineKeyboardButton("📋 Menu Editor", callback_data="admin_menu")],
+        [InlineKeyboardButton("⏰ Post Interval", callback_data="admin_interval"),
+         InlineKeyboardButton("📝 Broadcast", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("🛒 Add Product", callback_data="admin_addproduct"),
+         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
+        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
+         InlineKeyboardButton("🤖 Scan Now", callback_data="admin_scan")],
+        [InlineKeyboardButton("🧪 Test Channels", callback_data="admin_testchannels"),
+         InlineKeyboardButton("❌ Close", callback_data="admin_close")],
     ])
 
 def is_admin(update):
@@ -614,6 +620,54 @@ async def _button_handler_impl(update, context):
     if data.startswith("admin_"):
         if not is_admin(update):
             await query.answer("Not authorized.", show_alert=True); return
+        if data == "admin_force":
+            await query.edit_message_text(
+                "📢 <b>Force Join Channels</b>\n\n"
+                f"Required channel: <code>{html.escape(CHANNEL_ID or '@zoneroffers')}</code>\n"
+                "Publishing channels are NOT verification requirements.",
+                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+            return
+        if data == "admin_menu":
+            await query.edit_message_text(
+                "📋 <b>Menu Editor</b>\n\n"
+                "Use /addmenu Label|callback_data|row|column to add a custom item.",
+                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+            return
+        if data == "admin_interval":
+            interval = get_setting_sync("post_interval", SCAN_SECONDS)
+            await query.edit_message_text(
+                "⏰ <b>Post Interval</b>\n\n"
+                f"Current: <b>{html.escape(str(interval))} seconds</b>\n"
+                "Default: <b>1800 seconds (30 minutes)</b>\n\n"
+                "Change with: <code>/setinterval 1800</code>",
+                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+            return
+        if data == "admin_broadcast":
+            await query.edit_message_text(
+                "📝 <b>Broadcast</b>\n\n"
+                "Broadcast UI reserved here; existing subscriber notifications remain unchanged.",
+                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+            return
+        if data == "admin_addproduct":
+            await query.message.reply_text(
+                "🛒 <b>Add Product</b>\n\nUse /addoffer for the manual product/deal form.",
+                parse_mode=ParseMode.HTML)
+            return
+        if data == "admin_settings":
+            interval = get_setting_sync("post_interval", SCAN_SECONDS)
+            layout = get_setting_sync("menu_buttons_per_row", 2)
+            await query.edit_message_text(
+                "⚙️ <b>Settings</b>\n\n"
+                f"⏰ Post interval: <b>{html.escape(str(interval))} sec</b>\n"
+                f"📋 Menu buttons/row: <b>{html.escape(str(layout))}</b>\n"
+                f"🎯 Minimum deal score: <b>{MIN_DEAL_SCORE}</b>\n"
+                f"📢 Auto-post: <b>{'ON' if AUTO_POST else 'OFF'}</b>",
+                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+            return
+        if data == "admin_close":
+            await query.edit_message_text("✅ <b>Admin panel closed.</b>", parse_mode=ParseMode.HTML)
+            return
+
         if data == "admin_testchannels":
             await query.edit_message_text("🧪 <b>Testing channel posting…</b>", parse_mode=ParseMode.HTML)
             lines = ["🧪 <b>Channel posting test</b>"]
