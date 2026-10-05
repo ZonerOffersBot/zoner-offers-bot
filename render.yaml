@@ -24,6 +24,6 @@ services:
       - key: AUTO_POST
         value: "1"
       - key: SCAN_SECONDS
-        value: "120"
+        value: "90"
       - key: MIN_DEAL_SCORE
         value: "45"
