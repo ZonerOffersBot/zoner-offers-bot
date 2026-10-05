@@ -186,10 +186,30 @@ def init_db():
     con.close()
 
 def is_user_verified(user_id):
+    # Lifetime verification: once Telegram has confirmed membership, keep the
+    # local flag. The database is the source of truth for subsequent /start
+    # requests so verified users never get the join gate again.
     con = db()
-    row = con.execute("SELECT 1 FROM verified_users WHERE user_id=?", (user_id,)).fetchone()
-    con.close()
-    return row is not None
+    try:
+        row = con.execute(
+            "SELECT 1 FROM verified_users WHERE user_id=? LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        return row is not None
+    finally:
+        con.close()
+
+def ensure_verified_users_table():
+    # Defensive migration for existing deployments/databases.
+    con = db()
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS verified_users ("
+            "user_id INTEGER PRIMARY KEY, verified_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+        )
+        con.commit()
+    finally:
+        con.close()
 
 def mark_user_verified(user_id):
     con = db()
