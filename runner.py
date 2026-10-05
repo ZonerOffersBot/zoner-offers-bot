@@ -6,6 +6,9 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Conv
 log = logging.getLogger("zoner")
 
 async def fast_membership_status(telegram_bot, user_id):
+    # Persist successful verification so a user is verified only once.
+    if bot.is_user_verified(user_id):
+        return True
     now = asyncio.get_running_loop().time()
     cached = bot._membership_cache.get(user_id)
     if cached and now - cached[0] < bot.MEMBERSHIP_CACHE_SECONDS:
@@ -16,15 +19,23 @@ async def fast_membership_status(telegram_bot, user_id):
 
     async def check(chat_id, label):
         try:
-            member = await asyncio.wait_for(telegram_bot.get_chat_member(chat_id, user_id), timeout=2.0)
-            return member.status in {"member", "administrator", "creator"}
+            member = await asyncio.wait_for(telegram_bot.get_chat_member(chat_id, user_id), timeout=5.0)
+            # Telegram can report restricted users with is_member=True.
+            if member.status in {"member", "administrator", "creator"}:
+                return True
+            if member.status == "restricted" and getattr(member, "is_member", False):
+                return True
+            log.warning("Membership rejected for %s: status=%s user=%s", label, member.status, user_id)
+            return False
         except Exception as exc:
-            log.warning("Fast membership check failed for %s: %s", label, exc)
+            log.warning("Fast membership check failed for %s (bot must be admin to reliably check members): %s", label, exc)
             return False
 
     checks = await asyncio.gather(*(check(chat_id, label) for chat_id, label in required))
     result = bool(checks) and all(checks)
     bot._membership_cache[user_id] = (now, result)
+    if result:
+        bot.mark_user_verified(user_id)
     return result
 
 bot.membership_status = fast_membership_status
