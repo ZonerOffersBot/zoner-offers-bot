@@ -32,10 +32,9 @@ services:
       - key: AUTO_POST
         value: "1"
       - key: SCAN_SECONDS
-        value: "30"
+        value: "120"
       - key: MIN_DEAL_SCORE
         value: "45"
       - key: PYTHON_VERSION
         value: "3.11.9"
 
-# AUTO_PUBLISH_WAKE_2026_10_06
