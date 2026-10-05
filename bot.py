@@ -9,7 +9,7 @@ import hashlib
 from datetime import datetime, timezone
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 import xml.etree.ElementTree as ET
 
 import requests
@@ -43,26 +43,30 @@ CATEGORIES = {
 
 # Public, non-authenticated discovery feeds. The bot extracts deal headlines/links,
 # scores them, de-duplicates them, and only publishes strong candidates.
-DISCOVERY_QUERIES = [
-    ("Amazon", "Amazon India deal discount"),
-    ("Flipkart", "Flipkart India deal discount"),
-    ("Myntra", "Myntra India sale discount"),
-    ("Croma", "Croma India deal discount"),
-    ("Reliance Digital", "Reliance Digital India deal discount"),
-    ("Tata CLiQ", "Tata CLiQ India deal discount"),
-    ("Ajio", "AJIO India deal discount"),
-    ("Meesho", "Meesho India deal discount"),
-    ("Amazon", "Amazon India electronics mobile laptop headphones smartwatch appliance deal"),
-    ("Flipkart", "Flipkart India mobile laptop TV earbuds fashion home deal"),
-    ("Myntra", "Myntra India shoes jeans shirts dresses fashion deal"),
-    ("Ajio", "AJIO India shoes fashion accessories deal"),
-    ("Meesho", "Meesho India home kitchen beauty fashion product deal"),
-    ("Croma", "Croma India mobile laptop TV appliance deal"),
-    ("Reliance Digital", "Reliance Digital India mobile laptop TV appliance deal"),
-    ("Tata CLiQ", "Tata CLiQ India electronics fashion product deal"),
-    ("Gaming", "India gaming deal PS5 Xbox GPU laptop controller"),
-    ("Products", "India online shopping product deal discount sale")
+# ONLY these nine shopping platforms are allowed. No Croma/Reliance/Tata Cliq/news/blog/affiliate domains.
+PLATFORM_DOMAINS = {
+    "Amazon": {"amazon.in", "www.amazon.in"},
+    "Flipkart": {"flipkart.com", "www.flipkart.com"},
+    "Swiggy": {"swiggy.com", "www.swiggy.com"},
+    "Blinkit": {"blinkit.com", "www.blinkit.com"},
+    "BigBasket": {"bigbasket.com", "www.bigbasket.com"},
+    "Meesho": {"meesho.com", "www.meesho.com"},
+    "Myntra": {"myntra.com", "www.myntra.com"},
+    "Ajio": {"ajio.com", "www.ajio.com"},
+    "SHEIN": {"sheinindia.in", "www.sheinindia.in"},
+}
+PLATFORM_QUERIES = [
+    ("Amazon", "Amazon India product deal discount"),
+    ("Flipkart", "Flipkart India product deal discount"),
+    ("Swiggy", "Swiggy Instamart India deal discount"),
+    ("Blinkit", "Blinkit India product deal discount"),
+    ("BigBasket", "BigBasket India product deal discount"),
+    ("Meesho", "Meesho India product deal discount"),
+    ("Myntra", "Myntra India product sale discount"),
+    ("Ajio", "AJIO India product sale discount"),
+    ("SHEIN", "SHEIN India product sale discount"),
 ]
+DISCOVERY_QUERIES = PLATFORM_QUERIES
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -481,11 +485,31 @@ def fetch_feed(source, query):
         if title and link: items.append((source,title,link,pub))
     return items
 
+def resolve_platform_url(url, source):
+    """Follow Google News redirects, then accept ONLY the configured shopping platform domain."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+        allowed = PLATFORM_DOMAINS.get(source, set())
+        if host in allowed:
+            return url
+        r = requests.get(url, timeout=8, allow_redirects=True,
+                         headers={"User-Agent": "ZonerOffersBot/1.0"})
+        final_url = r.url
+        final_host = (urlparse(final_url).hostname or "").lower()
+        if final_host in allowed:
+            return final_url
+    except Exception as exc:
+        log.debug("URL resolution failed for %s: %s", source, exc)
+    return ""
+
 def discover_candidates():
     found = []
     for source, query in DISCOVERY_QUERIES:
         try:
-            found.extend(fetch_feed(source, query))
+            for item in fetch_feed(source, query):
+                resolved = resolve_platform_url(item[2], source)
+                if resolved:
+                    found.append((source, item[1], resolved, item[3]))
         except Exception as exc:
             log.warning("Discovery failed for %s: %s", source, exc)
     return found
@@ -495,17 +519,20 @@ def is_deal_candidate(source, title, url):
     source_words = {
         "amazon": ["amazon"],
         "flipkart": ["flipkart"],
-        "myntra": ["myntra"],
-        "croma": ["croma"],
-        "reliance digital": ["reliancedigital", "reliance digital"],
-        "tata cliq": ["tatacliq", "tata cliq"],
-        "ajio": ["ajio"],
+        "swiggy": ["swiggy", "instamart"],
+        "blinkit": ["blinkit"],
+        "bigbasket": ["bigbasket"],
         "meesho": ["meesho"],
-        "products": [],
-        "gaming": ["ps5", "ps4", "xbox", "gpu", "rtx", "gaming", "controller", "console"],
+        "myntra": ["myntra"],
+        "ajio": ["ajio"],
+        "shein": ["shein", "sheinindia"],
     }
     terms = source_words.get(source.lower(), [])
     if terms and not any(t in text for t in terms):
+        return False
+    # Final safety check: never publish a non-whitelisted shopping URL.
+    host = (urlparse(url).hostname or "").lower()
+    if host not in PLATFORM_DOMAINS.get(source, set()):
         return False
     deal_terms = ("deal", "offer", "sale", "discount", "off", "coupon", "price drop", "lowest", "save")
     return any(t in text for t in deal_terms) or extract_discount(title) > 0
