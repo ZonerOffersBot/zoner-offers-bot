@@ -916,7 +916,7 @@ def is_deal_candidate(source, title, url):
     if parsed.scheme not in {"http", "https"} or not host:
         return False
 
-    # Generic web-shopping mode: accept any plausible retailer/product URL,
+    # Generic web-shopping mode: accept plausible retailer/product URLs,
     # while rejecting obvious social, messaging, search and publisher hosts.
     blocked = {
         "news.google.com", "google.com", "youtube.com", "youtu.be",
@@ -931,15 +931,31 @@ def is_deal_candidate(source, title, url):
         "offers", "sale", "discount", "coupon", "price", "buy", "cart",
         "checkout", "fashion", "electronics", "grocery", "beauty"
     )
-    deal_terms = ("deal", "offer", "sale", "discount", "off", "coupon", "price drop", "lowest", "save")
+    deal_terms = (
+        "deal", "offer", "sale", "discount", "off", "coupon",
+        "price drop", "lowest", "save"
+    )
     path_text = (parsed.path + " " + parsed.query).lower()
     has_shopping_signal = any(t in text for t in shopping_terms) or any(
         t in path_text for t in shopping_terms
     )
     has_deal_signal = any(t in text for t in deal_terms) or extract_discount(title) > 0
 
-    # For generic discovery, require a shopping/product signal so ordinary
-    # news/blog links are not posted as deals.
+    # IMPORTANT: allow known shopping platforms even when the feed title does
+    # not literally contain words such as "deal" or "offer". Google/RSS feeds
+    # often return a clean product title plus a retailer URL, so the old
+    # two-signal gate could filter every real product and leave the publisher
+    # with no fresh candidate. Generic unknown domains still need both signals.
+    known_shopping_host = any(
+        host == domain or host.endswith("." + domain)
+        for domains in PLATFORM_DOMAINS.values()
+        for domain in domains
+    )
+    if known_shopping_host:
+        return has_shopping_signal or has_deal_signal or len(parsed.path.strip("/")) > 0
+
+    # Unknown retailers still need both shopping and deal signals so ordinary
+    # news/blog links are not published as deals.
     return has_shopping_signal and has_deal_signal
 
 def normalize_candidate(source, title, url):
@@ -1052,7 +1068,7 @@ async def scan_and_publish(bot, manual=False):
     selected = next((x for x in fresh if x["score"] >= MIN_DEAL_SCORE), None)
 
     # If no strong fresh candidate exists, publish the best fresh candidate.
-    # This keeps the link publisher moving without changing its 90-second
+    # This keeps the link publisher moving without changing its configured
     # schedule or touching the Telegram UI handlers.
     if selected is None and fresh:
         selected = fresh[0]
