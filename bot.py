@@ -327,9 +327,26 @@ async def button_handler(update, context):
         await query.edit_message_text(msg, parse_mode=ParseMode.HTML, reply_markup=admin_menu())
 
 async def admin_start(update, context):
-    if not is_admin(update): return ConversationHandler.END
+    if not is_admin(update):
+        return ConversationHandler.END
     context.user_data.clear()
-    await update.message.reply_text("➕ <b>Add New Offer</b>\n\n1/5 Send title:", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        "➕ <b>Add New Offer</b>\n\n1/5 Send title:",
+        parse_mode=ParseMode.HTML,
+    )
+    return C_TITLE
+
+async def admin_add_button(update, context):
+    query = update.callback_query
+    if not is_admin(update):
+        await query.answer("Not authorized.", show_alert=True)
+        return ConversationHandler.END
+    await query.answer()
+    context.user_data.clear()
+    await query.message.reply_text(
+        "➕ <b>Add New Offer</b>\n\n1/5 Send title:",
+        parse_mode=ParseMode.HTML,
+    )
     return C_TITLE
 
 async def got_title(update, context):
@@ -406,6 +423,24 @@ def discover_candidates():
             log.warning("Discovery failed for %s: %s", source, exc)
     return found
 
+def is_deal_candidate(source, title, url):
+    text = (title + " " + url).lower()
+    source_words = {
+        "amazon": ["amazon"],
+        "flipkart": ["flipkart"],
+        "myntra": ["myntra"],
+        "croma": ["croma"],
+        "reliance digital": ["reliancedigital", "reliance digital"],
+        "tata cliq": ["tatacliq", "tata cliq"],
+        "ajio": ["ajio"],
+        "gaming": ["ps5", "ps4", "xbox", "gpu", "rtx", "gaming", "controller", "console"],
+    }
+    terms = source_words.get(source.lower(), [])
+    if terms and not any(t in text for t in terms):
+        return False
+    deal_terms = ("deal", "offer", "sale", "discount", "off", "coupon", "price drop", "lowest", "save")
+    return any(t in text for t in deal_terms) or extract_discount(title) > 0
+
 def normalize_candidate(source, title, url):
     clean = re.sub(r"\s+", " ", html.unescape(title)).strip()
     discount = extract_discount(clean)
@@ -438,6 +473,9 @@ async def scan_and_publish(bot, manual=False):
     added = 0; skipped = 0
     seen = set()
     for raw in candidates:
+        if not is_deal_candidate(*raw):
+            skipped += 1
+            continue
         c = normalize_candidate(*raw)
         key = fingerprint(c["title"], c["url"])
         if key in seen: skipped += 1; continue
@@ -487,7 +525,10 @@ def run_bot():
     Thread(target=run_health_server, daemon=True).start()
     app = Application.builder().token(TOKEN).post_init(post_init).build()
     conversation = ConversationHandler(
-        entry_points=[CommandHandler("addoffer", admin_start)],
+        entry_points=[
+            CommandHandler("addoffer", admin_start),
+            CallbackQueryHandler(admin_add_button, pattern=r"^admin_add$")
+        ],
         states={
             C_TITLE:[MessageHandler(filters.TEXT & ~filters.COMMAND, got_title)],
             C_PRICE:[MessageHandler(filters.TEXT & ~filters.COMMAND, got_price)],
