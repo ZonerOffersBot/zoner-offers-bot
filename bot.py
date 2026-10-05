@@ -105,6 +105,9 @@ def db():
     return con
 
 def init_db():
+    # Keep the SQLite file configurable so a persistent Render volume can be
+    # attached later without changing bot code. Existing deployments continue
+    # using DB_FILE unchanged.
     con = db()
     con.execute("""CREATE TABLE IF NOT EXISTS offers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
