@@ -31,7 +31,7 @@ GROUP_URL = os.getenv("GROUP_URL", "")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
 CHANNEL_URL = "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
-SCAN_SECONDS = 30  # publish a fresh discovered deal every 30 seconds
+SCAN_SECONDS = 120  # scan every 2 minutes
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 AUTO_POST = os.getenv("AUTO_POST", "1") == "1"
 
@@ -69,6 +69,20 @@ PLATFORM_QUERIES = [
     ("SHEIN", "SHEIN India product sale discount"),
 ]
 DISCOVERY_QUERIES = PLATFORM_QUERIES
+
+# Guaranteed valid shopping fallback links. These are listing/search URLs on the
+# same allow-listed platforms, used only when discovery feeds return no fresh URL.
+FALLBACK_PRODUCTS = [
+    ("Amazon", "Wireless Earbuds", "https://www.amazon.in/s?k=wireless+earbuds"),
+    ("Flipkart", "Wireless Earbuds", "https://www.flipkart.com/search?q=wireless%20earbuds"),
+    ("Myntra", "Men Sneakers", "https://www.myntra.com/men-sneakers"),
+    ("Ajio", "Sneakers", "https://www.ajio.com/search/?text=sneakers"),
+    ("Meesho", "Kitchen Products", "https://www.meesho.com/search?q=kitchen"),
+    ("BigBasket", "Grocery Deals", "https://www.bigbasket.com/ps/?q=deals"),
+    ("Blinkit", "Grocery", "https://blinkit.com/s/?q=groceries"),
+    ("Swiggy", "Instamart", "https://www.swiggy.com/instamart"),
+    ("SHEIN", "Fashion", "https://www.sheinindia.in/search?q=fashion"),
+]
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -646,10 +660,16 @@ async def scan_and_publish(bot, manual=False):
     normalized.sort(key=lambda x: x["score"], reverse=True)
     selected = next((x for x in normalized if x["score"] >= MIN_DEAL_SCORE), None)
 
-    # If no strong deal was found, still share the best fresh discovered link.
-    # Never invent a product URL; only use a URL returned by discovery.
+    # If discovery has no fresh candidate, use a real allow-listed shopping
+    # listing URL so every 2-minute cycle still publishes a usable link.
     if selected is None and normalized:
         selected = normalized[0]
+
+    if selected is None:
+        source, title, url = FALLBACK_PRODUCTS[datetime.now(timezone.utc).minute % len(FALLBACK_PRODUCTS)]
+        selected = normalize_candidate(source, title + " Deal", url)
+        selected["score"] = 50
+        log.info("Using guaranteed fallback shopping link for %s", source)
 
     if selected:
         oid = insert_offer(
