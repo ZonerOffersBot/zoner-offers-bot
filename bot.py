@@ -443,7 +443,7 @@ def join_gate_markup():
             "📢 Second Channel (Optional)", url=SECOND_CHANNEL_URL
         )])
     rows.append([InlineKeyboardButton(
-        "✅ I Joined — Check Again", callback_data="check_join"
+        "🚀 Continue to Bot", callback_data="check_join"
     )])
     return InlineKeyboardMarkup(rows)
 
