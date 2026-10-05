@@ -943,17 +943,29 @@ def fetch_product_metadata(url):
 def fetch_product_image(url):
     return fetch_product_metadata(url)[2]
 
+def generate_product_description(title, category, existing=""):
+    """Use retailer metadata when available; otherwise provide a safe product-specific description."""
+    existing = re.sub(r"\s+", " ", html.unescape(existing or "")).strip()
+    if existing:
+        return existing[:700]
+    title = re.sub(r"\s+", " ", html.unescape(title or "")).strip()
+    label = CATEGORIES.get(category or "electronics", "🛍️ Product")
+    return (f"{title} — a {label.lower()} product selected for this deal. Check the retailer page for the latest specifications, variants, stock and current price before checkout.")[:700]
+
 def generate_ai_product_image_url(title, category):
     """Generate a product-specific anime/cartoon artwork URL."""
     title = re.sub(r"\s+", " ", html.unescape(title or "")).strip()[:180]
     category_label = CATEGORIES.get(category or "electronics", "🛍️ Product")
     prompt = (
-        "High quality square anime + modern cartoon product illustration for a "
-        "shopping deal post. Product: " + title + ". Category: " + category_label +
-        ". Make the product recognizable, premium, bright and centered on a clean "
-        "studio background. No people, no explicit content, no watermarks, no fake "
-        "price, no discount text, no retailer logo, no brand logo, and do not copy "
-        "an exact copyrighted product photograph."
+        "Create a UNIQUE square anime + modern cartoon illustration of the SPECIFIC "
+        "product in this title, not a generic item. Product: " + title +
+        ". Category: " + category_label +
+        ". For electronics, clearly depict the exact device type named in the title "
+        "(earbuds, headphones, phone, laptop, smartwatch, keyboard, mouse, speaker, "
+        "monitor, charger, camera, controller, etc.) and make its form factor match "
+        "the title. Clean premium studio background. No people, no text, no fake price, "
+        "no discount text, no retailer/brand logo, no watermark, and do not copy an "
+        "exact copyrighted product photograph."
     )
     return (
         "https://image.pollinations.ai/prompt/"
@@ -1262,7 +1274,7 @@ async def scan_and_publish(bot, manual=False):
                     candidate["title"] = meta_title
                     candidate["discount"] = extract_discount(meta_title) or candidate["discount"]
                     candidate["price"] = extract_price(meta_title) or candidate["price"]
-                candidate["description"] = description
+                candidate["description"] = generate_product_description(candidate["title"], candidate["category"], description)
                 if not image_url:
                     image_url = generate_ai_product_image_url(
                         candidate["title"], candidate["category"]
@@ -1300,6 +1312,9 @@ async def scan_and_publish(bot, manual=False):
                 candidate["category"], candidate["url"], candidate["source"],
                 candidate["discount"], candidate["score"],
                 image_url=generate_ai_product_image_url(
+                    candidate["title"], candidate["category"]
+                ),
+                description=generate_product_description(
                     candidate["title"], candidate["category"]
                 )
             )
