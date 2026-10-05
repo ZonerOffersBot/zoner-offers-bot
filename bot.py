@@ -59,6 +59,9 @@ try:
 except (TypeError, ValueError):
     SCAN_SECONDS = 120
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
+# Fresh product discovery is allowed once every 2 hours; publishing itself
+# continues on the normal interval and never waits for live scraping.
+DISCOVERY_SECONDS = 7200
 AUTO_POST = True  # Channel publishing is the bot's highest-priority job.
 
 CATEGORIES = {
@@ -1189,8 +1192,49 @@ async def scan_and_publish(bot, manual=False):
     added = 0
     skipped = 0
 
-    # First use an existing cached offer. It already contains the category,
-    # price fields and URL, so no live request is required.
+    # Discover NEW product/deal links at most once per 2 hours. Discovery is
+    # separate from publishing: image + product URL are cached before a post,
+    # so the publishing step itself never waits for live scraping.
+    try:
+        last_discovery = float(get_setting_sync("last_discovery_at", "0") or 0)
+    except (TypeError, ValueError):
+        last_discovery = 0.0
+
+    now_ts = datetime.now(timezone.utc).timestamp()
+    should_discover = (now_ts - last_discovery) >= DISCOVERY_SECONDS or offer_count() == 0
+
+    if should_discover:
+        try:
+            candidates = await asyncio.to_thread(discover_candidates)
+            new_count = 0
+            # Keep only genuine shopping/deal candidates and cache their
+            # product image before they become eligible for publication.
+            for source, title, url, _pub_date in candidates:
+                if not is_deal_candidate(source, title, url):
+                    continue
+                candidate = normalize_candidate(source, title, url)
+                image_url = ""
+                try:
+                    image_url = await asyncio.to_thread(fetch_product_image, candidate["url"])
+                except Exception as exc:
+                    log.debug("New-product image lookup failed: %s", exc)
+                oid = insert_offer(
+                    candidate["title"], candidate["price"], candidate["old_price"],
+                    candidate["category"], candidate["url"], candidate["source"],
+                    candidate["discount"], candidate["score"], image_url=image_url
+                )
+                if oid:
+                    new_count += 1
+                if new_count >= 20:
+                    break
+            set_setting_sync("last_discovery_at", str(now_ts))
+            log.info("🆕 Discovery cycle cached %s new product links (images best-effort)", new_count)
+        except Exception:
+            log.exception("New product discovery failed; cached publishing will continue")
+
+    # Prefer an unpublished/newly discovered cached offer first. If no fresh
+    # candidate is available, reuse the oldest cached offer after the 2-hour
+    # cooldown so automatic publishing never stops.
     row = get_cached_offer_for_publish()
 
     # If the cache has no data yet, seed it from the built-in shopping links.
