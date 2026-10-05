@@ -174,15 +174,22 @@ def score_deal(title, discount, source):
     return min(score, 100)
 
 async def membership_status(bot, user_id):
+    # Both public channels are mandatory. An optional configured group is
+    # also mandatory when GROUP_ID is set.
+    required = [
+        ("@zoneroffers", "channel 1"),
+        ("@offerleloturant", "channel 2"),
+    ]
+    if GROUP_ID:
+        required.append((GROUP_ID, "group"))
+
     checks = []
-    for chat_id, label in ((CHANNEL_ID, "channel"), (GROUP_ID, "group")):
-        if not chat_id:
-            continue
+    for chat_id, label in required:
         try:
             member = await bot.get_chat_member(chat_id, user_id)
             checks.append(member.status in {"member", "administrator", "creator"})
         except Exception as exc:
-            log.warning("Membership check failed for %s: %s", label, exc)
+            log.warning("Membership check failed for %s (%s): %s", label, chat_id, exc)
             checks.append(False)
     return bool(checks) and all(checks)
 
