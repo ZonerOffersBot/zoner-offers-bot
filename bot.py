@@ -307,15 +307,39 @@ def join_gate_text():
         "Dono required channels join karne ke baad <b>✅ I Joined — Check Again</b> dabayein."
     )
 
+def get_setting_sync(key, default=None):
+    """Read an admin-configurable setting from the live bot database."""
+    con = db()
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+        row = con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+    finally:
+        con.close()
+
 def main_menu(user_id=None):
+    """Build the live production menu using the admin-configured row layout."""
     notify = "🔔 Notifications ON" if user_id is not None and subscriber_enabled(user_id) else "🔕 Notifications OFF"
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛍️ Latest Deals", callback_data="offers"), InlineKeyboardButton("🏷️ Categories", callback_data="categories")],
-        [InlineKeyboardButton("💰 Price Filter", callback_data="price_filter")],
-        [InlineKeyboardButton(notify, callback_data="notifications")],
-        [InlineKeyboardButton("🤖 AI Deal Hunter", callback_data="ai_info")],
-        [InlineKeyboardButton("🆘 Help", callback_data="help")],
-    ])
+    try:
+        max_per_row = max(1, min(3, int(get_setting_sync("menu_buttons_per_row", 2))))
+    except (TypeError, ValueError):
+        max_per_row = 2
+
+    items = [
+        ("🛍️ Latest Deals", "offers"),
+        ("🏷️ Categories", "categories"),
+        ("💰 Price Filter", "price_filter"),
+        (notify, "notifications"),
+        ("🤖 AI Deal Hunter", "ai_info"),
+        ("🆘 Help", "help"),
+    ]
+    rows = []
+    for index in range(0, len(items), max_per_row):
+        rows.append([
+            InlineKeyboardButton(label, callback_data=callback)
+            for label, callback in items[index:index + max_per_row]
+        ])
+    return InlineKeyboardMarkup(rows)
 
 def price_filter_menu():
     return InlineKeyboardMarkup([
