@@ -89,7 +89,8 @@ def build_app():
         },
         fallbacks=[CommandHandler("cancel", bot.cancel)],
     )
-    app.add_error_handler(polling_error_handler)\n    app.add_handler(CommandHandler("start", bot.start))
+    app.add_error_handler(polling_error_handler)
+    app.add_handler(CommandHandler("start", bot.start))
     app.add_handler(CommandHandler("help", bot.help_command))
     app.add_handler(CommandHandler("admin", bot.admin_help))
     app.add_handler(CommandHandler("testchannels", bot.test_channels))
