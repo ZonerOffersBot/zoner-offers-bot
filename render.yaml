@@ -32,7 +32,7 @@ services:
       - key: AUTO_POST
         value: "1"
       - key: SCAN_SECONDS
-        value: "30"
+        value: "1"
       - key: MIN_DEAL_SCORE
         value: "45"
       - key: PYTHON_VERSION
