@@ -555,17 +555,21 @@ def is_admin(update):
 async def start(update, context):
     user_id = update.effective_user.id
 
-    # Channel membership verification is intentionally disabled.
-    # /start opens the bot immediately; users may join the channel separately.
+    # Show the channel-join screen on first start, but do NOT call Telegram
+    # membership verification. This avoids the previous verification failures.
+    if is_user_verified(user_id):
+        await update.message.reply_text(
+            "🔥 <b>Welcome back to Zoner Offers AI!</b>\n\n"
+            "👇 Choose an option:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(user_id),
+        )
+        return
+
     await update.message.reply_text(
-        "🔥 <b>Welcome to Zoner Offers AI!</b>\n\n"
-        "🤖 AI-style deal discovery\n"
-        "💸 Discounts & price drops\n"
-        "🔔 Smart deal alerts\n"
-        "🌐 Multiple shopping sources\n\n"
-        "👇 Choose an option:",
+        join_gate_text(),
         parse_mode=ParseMode.HTML,
-        reply_markup=main_menu(user_id),
+        reply_markup=join_gate_markup(),
     )
 
 async def help_command(update, context):
