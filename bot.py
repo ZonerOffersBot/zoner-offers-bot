@@ -204,7 +204,7 @@ def score_deal(title, discount, source):
     return min(score, 100)
 
 _membership_cache = {}
-MEMBERSHIP_CACHE_SECONDS = 30
+MEMBERSHIP_CACHE_SECONDS = 300
 
 async def membership_status(bot, user_id):
     # Cache verification briefly so every button click does not make multiple
@@ -223,7 +223,7 @@ async def membership_status(bot, user_id):
 
     async def check(chat_id, label):
         try:
-            member = await bot.get_chat_member(chat_id, user_id)
+            member = await asyncio.wait_for(bot.get_chat_member(chat_id, user_id), timeout=2.0)
             return member.status in {"member", "administrator", "creator"}
         except Exception as exc:
             log.warning("Membership check failed for %s (%s): %s", label, chat_id, exc)
