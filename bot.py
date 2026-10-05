@@ -23,8 +23,11 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+ADMIN_ID = os.getenv("ADMIN_ID", "").strip()
+ADMIN_IDS = {x.strip() for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
+if ADMIN_ID:
+    ADMIN_IDS.add(ADMIN_ID)
+CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
 # Required publication targets are enforced in code so a stale Render env var
 # cannot silently disable either channel.
 _REQUIRED_POST_CHANNELS = ["@zoneroffers", "@offerleloturant"]
@@ -35,7 +38,10 @@ GROUP_URL = os.getenv("GROUP_URL", "")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
 CHANNEL_URL = "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
-SCAN_SECONDS = 1800  # publish on a 30-minute cycle; channel publishing remains highest priority
+try:
+    SCAN_SECONDS = max(30, min(int(os.getenv("SCAN_SECONDS", "120")), 86400))
+except (TypeError, ValueError):
+    SCAN_SECONDS = 120
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 AUTO_POST = True  # Channel publishing is the bot's highest-priority job.
 
@@ -100,7 +106,7 @@ log = logging.getLogger("zoner")
 C_TITLE, C_PRICE, C_OLD, C_CATEGORY, C_URL = range(5)
 
 def db():
-    con = sqlite3.connect(DB_FILE, timeout=20)
+    con = sqlite3.connect(DB_FILE, timeout=30)
     con.row_factory = sqlite3.Row
     return con
 
@@ -291,20 +297,23 @@ async def membership_status(bot, user_id):
                     required_channel, user_id, exc)
         return False
 def join_gate_markup():
-    rows = [[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_URL)]]
+    channel_url = CHANNEL_URL
+    if CHANNEL_ID and str(CHANNEL_ID).startswith("@"):
+        channel_url = "https://t.me/" + str(CHANNEL_ID)[1:]
+    rows = [[InlineKeyboardButton("📢 Join Required Channel", url=channel_url)]]
     if GROUP_ID and GROUP_URL:
         rows.append([InlineKeyboardButton("👥 Join Group", url=GROUP_URL)])
-    rows.append([InlineKeyboardButton("📢 Join Second Channel", url=SECOND_CHANNEL_URL)])
+    rows.append([InlineKeyboardButton("📢 Join Second Channel (Optional)", url=SECOND_CHANNEL_URL)])
     rows.append([InlineKeyboardButton("✅ I Joined — Check Again", callback_data="check_join")])
     return InlineKeyboardMarkup(rows)
 
 def join_gate_text():
     return (
         "🔐 <b>Join Required</b>\n\n"
-        "Zoner Offers AI use karne se pehle hamare <b>channel</b>"
+        "Zoner Offers AI use karne se pehle hamare <b>required channel</b>"
         + (" <b>aur group</b>" if GROUP_ID and GROUP_URL else "")
         + " ko join karein.\n\n"
-        "Dono required channels join karne ke baad <b>✅ I Joined — Check Again</b> dabayein."
+        "Required membership complete hone ke baad <b>✅ I Joined — Check Again</b> dabayein."
     )
 
 def get_setting_sync(key, default=None):
@@ -401,7 +410,8 @@ def admin_menu():
     ])
 
 def is_admin(update):
-    return bool(ADMIN_ID and update.effective_user and str(update.effective_user.id) == str(ADMIN_ID))
+    user = getattr(update, "effective_user", None)
+    return bool(user and str(user.id) in ADMIN_IDS)
 
 async def start(update, context):
     user_id = update.effective_user.id
@@ -561,7 +571,7 @@ async def _button_handler_impl(update, context):
             try:
                 await query.edit_message_text(
                     "🔐 <b>Join verification not complete</b>\n\n"
-                    "Please make sure you have joined BOTH required channels, "
+                    "Please make sure you have joined the required channel, "
                     "then press <b>✅ I Joined — Check Again</b> again.",
                     parse_mode=ParseMode.HTML,
                     reply_markup=join_gate_markup()
@@ -570,7 +580,7 @@ async def _button_handler_impl(update, context):
                 log.warning("Could not refresh join gate: %s", exc)
                 try:
                     await query.message.reply_text(
-                        "⚠️ Verification not complete. Join both channels and tap Check Again."
+                        "⚠️ Verification not complete. Join the required channel and tap Check Again."
                     )
                 except Exception:
                     pass
@@ -755,10 +765,17 @@ async def got_title(update, context):
     await update.message.reply_text("2/5 Send current price. Example: <b>1299</b>", parse_mode=ParseMode.HTML); return C_PRICE
 
 async def got_price(update, context):
-    v = update.message.text.strip().replace("₹", "").strip()
-    if not v: await update.message.reply_text("❌ Price cannot be empty."); return C_PRICE
+    v = update.message.text.strip().replace("₹", "").replace(",", "").strip()
+    try:
+        price = float(v)
+        if price <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        await update.message.reply_text("❌ Enter a valid positive price, e.g. 1299.")
+        return C_PRICE
     context.user_data["price"] = v[:30]
-    await update.message.reply_text("3/5 Send old/MRP price, or <b>skip</b>:", parse_mode=ParseMode.HTML); return C_OLD
+    await update.message.reply_text("3/5 Send old/MRP price, or <b>skip</b>:", parse_mode=ParseMode.HTML)
+    return C_OLD
 
 async def got_old(update, context):
     v = update.message.text.strip()
@@ -773,11 +790,31 @@ async def got_category(update, context):
 
 async def got_url(update, context):
     url = update.message.text.strip()
-    if not url.startswith(("http://","https://")): await update.message.reply_text("❌ Invalid URL."); return C_URL
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        await update.message.reply_text("❌ Invalid URL. Send a full http(s) product/deal URL.")
+        return C_URL
     d = context.user_data
-    offer_id = insert_offer(d["title"], d["price"], d["old_price"], d["category"], url, "Manual", 0, 100)
+    offer_id = insert_offer(
+        d["title"], d["price"], d["old_price"], d["category"], url,
+        "Manual", 0, 100
+    )
+    if not offer_id:
+        await update.message.reply_text(
+            "⚠️ This offer already exists (duplicate title + URL).\n"
+            "Send a different product/deal URL."
+        )
+        return C_URL
     row = get_offer(offer_id)
-    await update.message.reply_text("✅ <b>Offer added.</b>\n\n" + offer_text(row), parse_mode=ParseMode.HTML, reply_markup=offer_markup(row))
+    if not row:
+        await update.message.reply_text("❌ Offer was saved but could not be loaded. Please retry.")
+        context.user_data.clear()
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "✅ <b>Offer added.</b>\n\n" + offer_text(row),
+        parse_mode=ParseMode.HTML,
+        reply_markup=offer_markup(row)
+    )
     await publish_offer(context.bot, row)
     context.user_data.clear()
     return ConversationHandler.END
@@ -1022,11 +1059,19 @@ async def scan_and_publish(bot, manual=False):
 
     fallback_used = False
     if selected is None:
-        source, title, url = FALLBACK_PRODUCTS[datetime.now(timezone.utc).minute % len(FALLBACK_PRODUCTS)]
-        selected = normalize_candidate(source, title + " Deal", url)
-        selected["score"] = 50
-        fallback_used = True
-        log.info("Using guaranteed fallback shopping link for %s", source)
+        # Pick a fallback that has never been stored. Never republish an
+        # existing fallback just to keep the scheduler busy.
+        fallback_pool = list(FALLBACK_PRODUCTS)
+        offset = datetime.now(timezone.utc).minute % len(fallback_pool)
+        fallback_pool = fallback_pool[offset:] + fallback_pool[:offset]
+        for source, title, url in fallback_pool:
+            candidate = normalize_candidate(source, title + " Deal", url)
+            if fingerprint(candidate["title"], candidate["url"]) not in existing_fingerprints:
+                selected = candidate
+                selected["score"] = 50
+                fallback_used = True
+                log.info("Using unique fallback shopping link for %s", source)
+                break
 
     if selected:
         # Validate the actual destination before saving/publishing. Broken,
@@ -1074,20 +1119,14 @@ async def scan_and_publish(bot, manual=False):
             )
             if oid:
                 row = get_offer(oid)
-                await publish_offer(bot, row)
-                added = 1
-            elif fallback_used:
-                # Only republish an existing fallback after its URL passed
-                # validation; never publish a broken fallback.
-                con = db()
-                row = con.execute("SELECT * FROM offers WHERE url=? ORDER BY id DESC LIMIT 1", (selected["url"],)).fetchone()
-                con.close()
                 if row:
                     await publish_offer(bot, row)
                     added = 1
                 else:
                     skipped += 1
             else:
+                # Fingerprint uniqueness is the final duplicate guard. Never
+                # republish an existing row merely because discovery repeated it.
                 skipped += 1
 
     return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: {len(candidates)}"
