@@ -943,12 +943,39 @@ def fetch_product_metadata(url):
 def fetch_product_image(url):
     return fetch_product_metadata(url)[2]
 
+def generate_ai_product_image_url(title, category):
+    """Generate a product-specific anime/cartoon artwork URL."""
+    title = re.sub(r"\s+", " ", html.unescape(title or "")).strip()[:180]
+    category_label = CATEGORIES.get(category or "electronics", "🛍️ Product")
+    prompt = (
+        "High quality square anime + modern cartoon product illustration for a "
+        "shopping deal post. Product: " + title + ". Category: " + category_label +
+        ". Make the product recognizable, premium, bright and centered on a clean "
+        "studio background. No people, no explicit content, no watermarks, no fake "
+        "price, no discount text, no retailer logo, no brand logo, and do not copy "
+        "an exact copyrighted product photograph."
+    )
+    return (
+        "https://image.pollinations.ai/prompt/"
+        + quote_plus(prompt)
+        + "?width=1024&height=1024&nologo=true"
+    )
+
 def ensure_offer_image(row):
-    """Fill a missing cached image once; never fail the publish cycle."""
+    """Image is mandatory: use real product image, otherwise AI artwork."""
     image = (row["image_url"] or "").strip() if "image_url" in row.keys() else ""
     if image:
         return image, row
-    image = fetch_product_image(row["url"])
+    try:
+        image = fetch_product_image(row["url"])
+    except Exception as exc:
+        log.debug("Retailer image lookup failed for deal %s: %s", row["id"], exc)
+        image = ""
+    if not image:
+        image = generate_ai_product_image_url(
+            row["title"],
+            row["category"] or guess_category(f"{row['title']} {row['source']} {row['url']}")
+        )
     if not image:
         return "", row
     con = db()
@@ -1147,26 +1174,18 @@ async def publish_offer(bot, row):
         image_url = ""
 
     async def send_deal(chat_id):
-        if image_url:
-            try:
-                await bot.send_photo(
-                    chat_id=chat_id, photo=image_url, caption=text,
-                    parse_mode=ParseMode.HTML, reply_markup=markup,
-                    read_timeout=8, write_timeout=8
-                )
-                return True
-            except Exception as exc:
-                log.warning("Photo publish failed for %s to %s; falling back to text: %s",
-                            row["id"], chat_id, exc)
+        if not image_url:
+            log.warning("Mandatory image unavailable for deal %s; not publishing text-only post", row["id"])
+            return False
         try:
-            await bot.send_message(
-                chat_id=chat_id, text=text, parse_mode=ParseMode.HTML,
-                reply_markup=markup, disable_web_page_preview=False,
+            await bot.send_photo(
+                chat_id=chat_id, photo=image_url, caption=text,
+                parse_mode=ParseMode.HTML, reply_markup=markup,
                 read_timeout=8, write_timeout=8
             )
             return True
         except Exception as exc:
-            log.warning("Text publish failed for %s to %s: %s", row["id"], chat_id, exc)
+            log.warning("Photo publish failed for %s to %s: %s", row["id"], chat_id, exc)
             return False
 
     if AUTO_POST:
@@ -1244,6 +1263,10 @@ async def scan_and_publish(bot, manual=False):
                     candidate["discount"] = extract_discount(meta_title) or candidate["discount"]
                     candidate["price"] = extract_price(meta_title) or candidate["price"]
                 candidate["description"] = description
+                if not image_url:
+                    image_url = generate_ai_product_image_url(
+                        candidate["title"], candidate["category"]
+                    )
                 oid = insert_offer(
                     candidate["title"], candidate["price"], candidate["old_price"],
                     candidate["category"], candidate["url"], candidate["source"],
@@ -1275,7 +1298,10 @@ async def scan_and_publish(bot, manual=False):
             oid = insert_offer(
                 candidate["title"], candidate["price"], candidate["old_price"],
                 candidate["category"], candidate["url"], candidate["source"],
-                candidate["discount"], candidate["score"]
+                candidate["discount"], candidate["score"],
+                image_url=generate_ai_product_image_url(
+                    candidate["title"], candidate["category"]
+                )
             )
             if oid:
                 row = get_offer(oid)
