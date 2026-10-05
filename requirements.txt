@@ -1,3 +1,8 @@
-python-telegram-bot==22.5
-requests==2.32.5
+python-telegram-bot[job-queue]==22.5
+aiosqlite
+httpx
 beautifulsoup4==4.14.2
+selenium
+apscheduler
+python-dotenv
+requests==2.32.5
