@@ -29,7 +29,7 @@ GROUP_URL = os.getenv("GROUP_URL", "")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
 CHANNEL_URL = "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
-SCAN_MINUTES = 5  # fixed: publish a fresh discovered deal every 5 minutes
+SCAN_SECONDS = 10  # publish a fresh discovered deal every 10 seconds
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 AUTO_POST = os.getenv("AUTO_POST", "1") == "1"
 
@@ -51,7 +51,17 @@ DISCOVERY_QUERIES = [
     ("Reliance Digital", "Reliance Digital India deal discount"),
     ("Tata CLiQ", "Tata CLiQ India deal discount"),
     ("Ajio", "AJIO India deal discount"),
-    ("Gaming", "India gaming deal discount PS5 Xbox GPU"),
+    ("Meesho", "Meesho India deal discount"),
+    ("Amazon", "Amazon India electronics mobile laptop headphones smartwatch appliance deal"),
+    ("Flipkart", "Flipkart India mobile laptop TV earbuds fashion home deal"),
+    ("Myntra", "Myntra India shoes jeans shirts dresses fashion deal"),
+    ("Ajio", "AJIO India shoes fashion accessories deal"),
+    ("Meesho", "Meesho India home kitchen beauty fashion product deal"),
+    ("Croma", "Croma India mobile laptop TV appliance deal"),
+    ("Reliance Digital", "Reliance Digital India mobile laptop TV appliance deal"),
+    ("Tata CLiQ", "Tata CLiQ India electronics fashion product deal"),
+    ("Gaming", "India gaming deal PS5 Xbox GPU laptop controller"),
+    ("Products", "India online shopping product deal discount sale")
 ]
 
 logging.basicConfig(
@@ -279,7 +289,7 @@ async def start(update, context):
 async def help_command(update, context):
     await update.message.reply_text(
         "🆘 <b>Zoner Offers AI</b>\n\n"
-        "The bot continuously checks public deal/news feeds, scores candidates, removes duplicates and publishes strong deals.\n\n"
+        "The bot continuously checks public deal/news feeds, scores candidates, removes duplicates and publishes fresh deals.\n\n"
         "🛍️ Latest Deals — browse\n🏷️ Categories — filter\n🔔 Notifications — alerts\n"
         "🤖 AI Deal Hunter — how discovery works\n🛒 Buy / View Deal — open source offer.",
         parse_mode=ParseMode.HTML, reply_markup=main_menu(update.effective_user.id))
@@ -322,7 +332,7 @@ async def button_handler(update, context):
         await query.edit_message_text(
             "🤖 <b>AI Deal Hunter</b>\n\n"
             "Zoner checks multiple public deal sources automatically, detects discount signals, scores deal quality, filters duplicates and publishes only stronger candidates.\n\n"
-            f"⏱️ Scan interval: every {SCAN_MINUTES} min\n🎯 Minimum score: {MIN_DEAL_SCORE}/100",
+            f"⏱️ Auto deal scan: every {SCAN_SECONDS} seconds\n🎯 Minimum score: {MIN_DEAL_SCORE}/100",
             parse_mode=ParseMode.HTML, reply_markup=main_menu(query.from_user.id)); return
     if data.startswith("offer_"):
         try: offer_id = int(data[6:])
@@ -362,7 +372,7 @@ async def button_handler(update, context):
             await query.edit_message_text(
                 "📊 <b>Zoner AI Stats</b>\n\n"
                 f"🛍️ Offers: <b>{offer_count()}</b>\n🔔 Subscribers: <b>{subscriber_count()}</b>\n"
-                f"⏱️ Auto scan: <b>{SCAN_MINUTES} min</b>\n🎯 Min score: <b>{MIN_DEAL_SCORE}</b>",
+                f"⏱️ Auto scan: <b>{SCAN_SECONDS} sec</b>\n🎯 Min score: <b>{MIN_DEAL_SCORE}</b>",
                 parse_mode=ParseMode.HTML, reply_markup=admin_menu()); return
         if data == "admin_panel":
             await query.edit_message_text("🔐 <b>AI Admin Panel</b>\n\nChoose an action:", parse_mode=ParseMode.HTML, reply_markup=admin_menu()); return
@@ -490,6 +500,8 @@ def is_deal_candidate(source, title, url):
         "reliance digital": ["reliancedigital", "reliance digital"],
         "tata cliq": ["tatacliq", "tata cliq"],
         "ajio": ["ajio"],
+        "meesho": ["meesho"],
+        "products": [],
         "gaming": ["ps5", "ps4", "xbox", "gpu", "rtx", "gaming", "controller", "console"],
     }
     terms = source_words.get(source.lower(), [])
@@ -576,7 +588,7 @@ async def auto_scan_loop(app):
             log.info("AI scan: %s", result.replace("\n"," | "))
         except Exception:
             log.exception("AI scan failed")
-        await asyncio.sleep(max(10, SCAN_MINUTES * 60))
+        await asyncio.sleep(SCAN_SECONDS)
 
 async def admin_help(update, context):
     if not is_admin(update): return
