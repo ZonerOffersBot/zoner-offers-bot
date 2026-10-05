@@ -1128,11 +1128,7 @@ async def publish_offer(bot, row):
         skipped = 1
         log.warning("No configured channel accepted deal id=%s; keeping scheduler alive", row["id"])
 
-    return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: 1"
-
-: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: {len(candidates)}"
-
-async def auto_scan_loop(app):
+    return f"Addedasync def auto_scan_loop(app):
     """Single production publishing loop with admin-configurable interval.
 
     The runner starts only this loop, preventing duplicate APScheduler jobs.
