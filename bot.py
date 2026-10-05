@@ -661,27 +661,36 @@ def normalize_candidate(source, title, url):
     }
 
 async def publish_offer(bot, row):
-    """Publish to channels first, with short retries, then notify subscribers."""
+    """Publish the same deal to every configured channel and subscribers."""
     text = "🤖 <b>AI Deal Alert</b>\n\n" + offer_text(row)
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy / View Deal", url=row["url"])]])
+    channel_results = []
+
     if AUTO_POST:
+        # Every discovered/fallback link is posted to ALL configured channels.
         for channel in POST_CHANNELS:
             posted = False
             for attempt in range(3):
                 try:
                     await bot.send_message(
-                        channel, text=text, parse_mode=ParseMode.HTML,
-                        reply_markup=markup, read_timeout=8, write_timeout=8
+                        chat_id=channel, text=text, parse_mode=ParseMode.HTML,
+                        reply_markup=markup, disable_web_page_preview=False,
+                        read_timeout=8, write_timeout=8
                     )
-                    log.info("Posted deal to %s", channel)
+                    log.info("✅ Published deal %s to channel %s", row["id"], channel)
+                    channel_results.append((channel, True))
                     posted = True
                     break
                 except Exception as exc:
-                    log.warning("Channel post failed for %s (attempt %s/3): %s", channel, attempt + 1, exc)
+                    log.warning(
+                        "Channel post failed for %s (attempt %s/3): %s",
+                        channel, attempt + 1, exc
+                    )
                     if attempt < 2:
                         await asyncio.sleep(1)
             if not posted:
-                log.error("Giving up channel post for %s after 3 attempts", channel)
+                channel_results.append((channel, False))
+                log.error("❌ Could not publish deal %s to %s", row["id"], channel)
 
     con = db()
     users = con.execute("SELECT user_id FROM subscribers WHERE enabled=1").fetchall()
@@ -689,8 +698,9 @@ async def publish_offer(bot, row):
     for user in users:
         try:
             await bot.send_message(
-                user["user_id"], text=text, parse_mode=ParseMode.HTML,
-                reply_markup=markup, read_timeout=8, write_timeout=8
+                chat_id=user["user_id"], text=text, parse_mode=ParseMode.HTML,
+                reply_markup=markup, disable_web_page_preview=False,
+                read_timeout=8, write_timeout=8
             )
         except Exception as exc:
             log.debug("Notify failed %s: %s", user["user_id"], exc)
