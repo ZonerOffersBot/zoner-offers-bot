@@ -330,23 +330,53 @@ async def membership_status(bot, user_id):
             bot.get_chat(chat_id=required_channel),
             timeout=8.0
         )
-        member = await asyncio.wait_for(
-            bot.get_chat_member(chat_id=chat.id, user_id=user_id),
-            timeout=8.0
+        last_status = ""
+        last_member_flag = None
+        for attempt in range(3):
+            try:
+                member = await asyncio.wait_for(
+                    bot.get_chat_member(chat_id=chat.id, user_id=user_id),
+                    timeout=6.0
+                )
+                status = str(getattr(member, "status", "")).lower()
+                is_member = getattr(member, "is_member", None)
+                last_status = status
+                last_member_flag = is_member
+                verified = status in {"member", "administrator", "creator"} or (
+                    status == "restricted" and is_member is True
+                )
+                if verified:
+                    mark_user_verified(user_id)
+                    log.info(
+                        "Force-join verified user=%s channel=%s chat_id=%s status=%s attempt=%s",
+                        user_id, required_channel, chat.id, status, attempt + 1
+                    )
+                    return True
+                # A fresh Telegram response says the account is not a member.
+                # Do not cache this negative result; the user may have joined
+                # seconds ago and the next check should be allowed to succeed.
+                log.info(
+                    "Force-join rejected user=%s channel=%s chat_id=%s status=%s is_member=%s attempt=%s",
+                    user_id, required_channel, chat.id, status, is_member, attempt + 1
+                )
+                if attempt < 2:
+                    await asyncio.sleep(1.0)
+                    continue
+                return False
+            except Exception as exc:
+                log.warning(
+                    "Force-join membership API attempt %s/3 failed channel=%s user=%s: %s (%s)",
+                    attempt + 1, required_channel, user_id, exc, type(exc).__name__
+                )
+                if attempt < 2:
+                    await asyncio.sleep(1.0)
+                else:
+                    raise
+        log.warning(
+            "Force-join final rejection user=%s channel=%s status=%s is_member=%s",
+            user_id, required_channel, last_status, last_member_flag
         )
-        status = str(getattr(member, "status", "")).lower()
-        is_member = getattr(member, "is_member", None)
-        verified = status in {"member", "administrator", "creator"} or (
-            status == "restricted" and is_member is True
-        )
-        if verified:
-            mark_user_verified(user_id)
-            log.info("Force-join verified user=%s channel=%s chat_id=%s status=%s",
-                     user_id, required_channel, chat.id, status)
-        else:
-            log.info("Force-join rejected user=%s channel=%s status=%s is_member=%s",
-                     user_id, required_channel, status, is_member)
-        return verified
+        return False
     except Exception as exc:
         # Never bypass verification when Telegram cannot answer. Keep the
         # failure visible in logs so a bad CHANNEL_ID / missing bot admin
@@ -576,7 +606,7 @@ async def show_offers(update, category=None, price_filter=None):
     await query.edit_message_text(f"<b>{html.escape(title)}</b>\n\n👇 Select a deal:", parse_mode=ParseMode.HTML,
                                   reply_markup=offer_buttons(rows, back))
 
-async def button_handler(update, context):
+async async def button_handler(update, context):
     """Fault-tolerant callback entrypoint.
 
     A single Telegram API/edit/DB exception must never leave the user with a
