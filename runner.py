@@ -29,10 +29,25 @@ async def fast_membership_status(telegram_bot, user_id):
 
 bot.membership_status = fast_membership_status
 
+async def polling_error_handler(update, context):
+    # Never let a Telegram polling/handler exception silently kill the bot.
+    exc = context.error
+    log.error("Telegram runtime error: %r", exc, exc_info=exc)
+
+
 async def managed_post_init(app):
+    # Ensure stale webhook configuration cannot block long-polling updates.
+    try:
+        await app.bot.delete_webhook(drop_pending_updates=False)
+        me = await app.bot.get_me()
+        log.info("✅ Telegram connection OK: @%s", me.username or me.id)
+    except Exception:
+        log.exception("❌ Telegram startup check failed")
+        raise
+
     task = asyncio.create_task(bot.auto_scan_loop(app), name="zoner-auto-scan")
     app.bot_data["auto_scan_task"] = task
-    log.info("🤖 Autonomous deal scanner started.")
+    log.info("🤖 Autonomous deal scanner started (120s cycle).")
 
 async def managed_post_stop(app):
     task = app.bot_data.pop("auto_scan_task", None)
@@ -74,7 +89,7 @@ def build_app():
         },
         fallbacks=[CommandHandler("cancel", bot.cancel)],
     )
-    app.add_handler(CommandHandler("start", bot.start))
+    app.add_error_handler(polling_error_handler)\n    app.add_handler(CommandHandler("start", bot.start))
     app.add_handler(CommandHandler("help", bot.help_command))
     app.add_handler(CommandHandler("admin", bot.admin_help))
     app.add_handler(CommandHandler("testchannels", bot.test_channels))
