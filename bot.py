@@ -277,7 +277,10 @@ async def membership_status(bot, user_id):
         ("@zoneroffers", "channel 1"),
         ("@offerleloturant", "channel 2"),
     ]
-    if GROUP_ID:
+    # The two public channels are the only mandatory join checks.
+    # GROUP_ID is optional and must never silently block users when its
+    # invite URL/config is stale or missing.
+    if GROUP_ID and GROUP_URL:
         required.append((GROUP_ID, "group"))
 
     async def check(chat_id, label):
@@ -314,9 +317,9 @@ def join_gate_text():
     return (
         "🔐 <b>Join Required</b>\n\n"
         "Zoner Offers AI use karne se pehle hamare <b>channel</b>"
-        + (" <b>aur group</b>" if GROUP_ID else "")
+        + (" <b>aur group</b>" if GROUP_ID and GROUP_URL else "")
         + " ko join karein.\n\n"
-        "Dono required channels/group join karne ke baad <b>✅ I Joined — Check Again</b> dabayein."
+        "Dono required channels join karne ke baad <b>✅ I Joined — Check Again</b> dabayein."
     )
 
 def main_menu(user_id=None):
