@@ -665,10 +665,12 @@ async def scan_and_publish(bot, manual=False):
     if selected is None and normalized:
         selected = normalized[0]
 
+    fallback_used = False
     if selected is None:
         source, title, url = FALLBACK_PRODUCTS[datetime.now(timezone.utc).minute % len(FALLBACK_PRODUCTS)]
         selected = normalize_candidate(source, title + " Deal", url)
         selected["score"] = 50
+        fallback_used = True
         log.info("Using guaranteed fallback shopping link for %s", source)
 
     if selected:
@@ -681,6 +683,17 @@ async def scan_and_publish(bot, manual=False):
             row = get_offer(oid)
             await publish_offer(bot, row)
             added = 1
+        elif fallback_used:
+            # A fallback URL may already exist; republish the existing valid
+            # shopping link rather than breaking the 2-minute posting promise.
+            con = db()
+            row = con.execute("SELECT * FROM offers WHERE url=? ORDER BY id DESC LIMIT 1", (selected["url"],)).fetchone()
+            con.close()
+            if row:
+                await publish_offer(bot, row)
+                added = 1
+            else:
+                skipped += 1
         else:
             skipped += 1
 
