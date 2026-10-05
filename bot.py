@@ -862,12 +862,30 @@ async def scan_and_publish(bot, manual=False):
 
     # Highest quality first so the channel gets one useful link per cycle.
     normalized.sort(key=lambda x: x["score"], reverse=True)
-    selected = next((x for x in normalized if x["score"] >= MIN_DEAL_SCORE), None)
 
-    # If discovery has no fresh candidate, use a real allow-listed shopping
-    # listing URL so every 2-minute cycle still publishes a usable link.
-    if selected is None and normalized:
-        selected = normalized[0]
+    # Never let an already-stored fingerprint stop the publisher. Discovery
+    # feeds often repeat the same deal for several cycles; skip stored
+    # fingerprints here and keep looking for a fresh candidate.
+    con = db()
+    existing_fingerprints = {
+        row["fingerprint"]
+        for row in con.execute(
+            "SELECT fingerprint FROM offers WHERE fingerprint IS NOT NULL"
+        ).fetchall()
+    }
+    con.close()
+
+    fresh = [
+        x for x in normalized
+        if fingerprint(x["title"], x["url"]) not in existing_fingerprints
+    ]
+    selected = next((x for x in fresh if x["score"] >= MIN_DEAL_SCORE), None)
+
+    # If no strong fresh candidate exists, publish the best fresh candidate.
+    # This keeps the link publisher moving without changing its 90-second
+    # schedule or touching the Telegram UI handlers.
+    if selected is None and fresh:
+        selected = fresh[0]
 
     fallback_used = False
     if selected is None:
