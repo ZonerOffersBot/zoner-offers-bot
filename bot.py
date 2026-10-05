@@ -402,11 +402,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "admin_add":
             await query.message.reply_text(
                 "➕ <b>Add Offer</b>\n\n"
-                "1/5 Send the product/offer title:",
+                "Use /addoffer to start the guided 5-step form.",
                 parse_mode=ParseMode.HTML,
             )
-            context.user_data["admin_from_button"] = True
-            # The ConversationHandler owns the actual state.
             return
 
         if data == "admin_offers":
@@ -571,17 +569,14 @@ async def got_old(update, context):
         None if value.lower() in {"skip", "-", "no"} else value.replace("₹", "").strip()[:30]
     )
 
-    keyboard = [
-        [InlineKeyboardButton("📱 Electronics", callback_data="addcat_electronics")],
-        [InlineKeyboardButton("🎮 Gaming", callback_data="addcat_gaming")],
-        [InlineKeyboardButton("👕 Fashion", callback_data="addcat_fashion")],
-        [InlineKeyboardButton("🏠 Home & Kitchen", callback_data="addcat_home")],
-        [InlineKeyboardButton("📚 Books", callback_data="addcat_books")],
-    ]
     await update.message.reply_text(
-        "4/5 <b>Choose a category:</b>",
+        "4/5 Choose a category by typing one of these:\n\n"
+        "📱 electronics\n"
+        "🎮 gaming\n"
+        "👕 fashion\n"
+        "🏠 home\n"
+        "📚 books",
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return C_CATEGORY
 
