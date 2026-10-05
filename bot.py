@@ -41,6 +41,10 @@ CATEGORIES = {
     "fashion": "👕 Fashion",
     "home": "🏠 Home & Kitchen",
     "books": "📚 Books",
+    "grocery": "🛒 Grocery",
+    "beauty": "💄 Beauty",
+    "sports": "🏃 Sports & Fitness",
+    "kids": "🧸 Kids & Baby",
 }
 
 # Public, non-authenticated discovery feeds. The bot extracts deal headlines/links,
@@ -175,11 +179,24 @@ def fingerprint(title, url):
     return hashlib.sha256((re.sub(r"\W+", " ", title.lower()).strip() + "|" + url.split("?")[0]).encode()).hexdigest()
 
 def guess_category(text):
+    """Assign every discovered link to the most relevant product category."""
     t = text.lower()
-    if any(x in t for x in ["ps5", "ps4", "xbox", "gaming", "gpu", "rtx", "controller", "steam"]): return "gaming"
-    if any(x in t for x in ["shirt", "jeans", "shoe", "sneaker", "dress", "fashion", "myntra", "ajio"]): return "fashion"
-    if any(x in t for x in ["sofa", "mixer", "fridge", "refrigerator", "washing", "kitchen", "chair", "home"]): return "home"
-    if any(x in t for x in ["book", "novel", "kindle"]): return "books"
+    if any(x in t for x in ["ps5", "ps4", "xbox", "gaming", "gpu", "rtx", "controller", "steam", "nintendo"]):
+        return "gaming"
+    if any(x in t for x in ["shirt", "jeans", "shoe", "sneaker", "dress", "fashion", "myntra", "ajio", "saree", "kurti", "jacket"]):
+        return "fashion"
+    if any(x in t for x in ["sofa", "mixer", "fridge", "refrigerator", "washing", "kitchen", "chair", "home", "cookware", "furniture"]):
+        return "home"
+    if any(x in t for x in ["book", "novel", "kindle", "textbook", "comics"]):
+        return "books"
+    if any(x in t for x in ["grocery", "groceries", "food", "blinkit", "bigbasket", "zepto", "instamart", "snacks", "rice", "atta", "oil"]):
+        return "grocery"
+    if any(x in t for x in ["beauty", "makeup", "cosmetic", "skincare", "skin care", "shampoo", "nykaa", "perfume", "fragrance"]):
+        return "beauty"
+    if any(x in t for x in ["sports", "fitness", "gym", "decathlon", "cricket", "football", "badminton", "running", "yoga", "dumbbell"]):
+        return "sports"
+    if any(x in t for x in ["kids", "baby", "toys", "toy", "firstcry", "diaper", "stroller", "children"]):
+        return "kids"
     return "electronics"
 
 def extract_price(text):
@@ -653,7 +670,7 @@ def normalize_candidate(source, title, url):
         "title": clean[:200],
         "price": price or "Check live price",
         "old_price": None,
-        "category": guess_category(clean),
+        "category": guess_category(f"{clean} {source} {url}"),
         "url": url,
         "source": source,
         "discount": discount,
