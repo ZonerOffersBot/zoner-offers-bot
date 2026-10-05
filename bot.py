@@ -627,6 +627,41 @@ async def admin_help(update, context):
     await update.message.reply_text("🔐 <b>Zoner AI Admin</b>\n\n🤖 Auto-scanning is enabled. Use the panel to scan manually or manage offers.",
                                     parse_mode=ParseMode.HTML, reply_markup=admin_menu())
 
+
+async def test_channels(update, context):
+    """Admin-only Telegram channel diagnostics."""
+    if not is_admin(update):
+        return
+    lines = ["🧪 <b>Channel posting test</b>"]
+    for channel in POST_CHANNELS:
+        try:
+            chat = await context.bot.get_chat(channel)
+            member = await context.bot.get_chat_member(chat.id, context.bot.id)
+            status = getattr(member, "status", "unknown")
+            rights = getattr(member, "can_post_messages", None)
+            lines.append(
+                f"\n<b>{html.escape(channel)}</b>\n"
+                f"Chat: <code>{chat.id}</code>\n"
+                f"Bot status: <code>{html.escape(str(status))}</code>\n"
+                f"Can post: <code>{html.escape(str(rights))}</code>"
+            )
+            if status not in {"administrator", "creator"} or rights is False:
+                lines.append("❌ Bot does not have channel posting permission.")
+                continue
+            msg = await context.bot.send_message(
+                chat.id,
+                "🧪 <b>Zoner Offers AI test message</b>\n\nChannel posting is working. ✅",
+                parse_mode=ParseMode.HTML,
+            )
+            lines.append(f"✅ Test message sent: <code>{msg.message_id}</code>")
+        except Exception as exc:
+            log.exception("Channel diagnostic failed for %s", channel)
+            lines.append(
+                f"❌ <b>Failed</b>\n<code>{html.escape(type(exc).__name__)}: "
+                f"{html.escape(str(exc))}</code>"
+            )
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.send_header("Content-type","text/plain"); self.end_headers()
@@ -662,6 +697,7 @@ def run_bot():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin_help))
+    app.add_handler(CommandHandler("testchannels", test_channels))
     app.add_handler(conversation)
     app.add_handler(CallbackQueryHandler(button_handler))
     log.info("🔥 Zoner Offers AI is running.")
