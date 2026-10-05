@@ -283,7 +283,10 @@ async def membership_status(bot, user_id):
     async def check(chat_id, label):
         try:
             member = await asyncio.wait_for(bot.get_chat_member(chat_id, user_id), timeout=5.0)
-            return member.status in {"member", "administrator", "creator"}
+            status = str(getattr(member, "status", "")).lower()
+            # Any active membership state is accepted. "restricted" is a
+            # legitimate Telegram membership state and must not be rejected.
+            return status in {"member", "administrator", "creator", "restricted"}
         except Exception as exc:
             log.warning("Membership check failed for %s (%s): %s", label, chat_id, exc)
             return False
