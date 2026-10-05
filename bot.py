@@ -11,6 +11,7 @@ from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import quote_plus, urlparse
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from bs4 import BeautifulSoup
@@ -534,15 +535,38 @@ def resolve_platform_url(url, source):
     return ""
 
 def discover_candidates():
-    found = []
-    for source, query in DISCOVERY_QUERIES:
+    """Discover from all allowed platforms concurrently so one slow source cannot
+    consume the whole 30-second posting window."""
+    def discover_one(source, query):
+        local = []
         try:
-            for item in fetch_feed(source, query):
-                resolved = resolve_platform_url(item[2], source)
-                if resolved:
-                    found.append((source, item[1], resolved, item[3]))
+            items = fetch_feed(source, query)
+            # Resolve links concurrently too; only whitelisted final domains survive.
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                futures = {
+                    pool.submit(resolve_platform_url, item[2], source): item
+                    for item in items[:12]
+                }
+                for future in as_completed(futures):
+                    item = futures[future]
+                    try:
+                        resolved = future.result()
+                    except Exception:
+                        resolved = ""
+                    if resolved:
+                        local.append((source, item[1], resolved, item[3]))
         except Exception as exc:
             log.warning("Discovery failed for %s: %s", source, exc)
+        return local
+
+    found = []
+    with ThreadPoolExecutor(max_workers=min(9, len(DISCOVERY_QUERIES))) as pool:
+        futures = [pool.submit(discover_one, source, query) for source, query in DISCOVERY_QUERIES]
+        for future in as_completed(futures):
+            try:
+                found.extend(future.result())
+            except Exception as exc:
+                log.warning("Parallel discovery worker failed: %s", exc)
     return found
 
 def is_deal_candidate(source, title, url):
@@ -643,14 +667,18 @@ async def scan_and_publish(bot, manual=False):
     return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: {len(candidates)}"
 
 async def auto_scan_loop(app):
-    await asyncio.sleep(15)
+    # Start quickly, then keep the cycle anchored to the clock so discovery
+    # time does not add another 30 seconds of delay.
+    await asyncio.sleep(3)
     while True:
+        cycle_started = asyncio.get_running_loop().time()
         try:
             result = await scan_and_publish(app.bot)
             log.info("AI scan: %s", result.replace("\n"," | "))
         except Exception:
             log.exception("AI scan failed")
-        await asyncio.sleep(SCAN_SECONDS)
+        elapsed = asyncio.get_running_loop().time() - cycle_started
+        await asyncio.sleep(max(1.0, SCAN_SECONDS - elapsed))
 
 async def admin_help(update, context):
     if not is_admin(update): return
