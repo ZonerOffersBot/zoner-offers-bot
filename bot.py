@@ -449,6 +449,34 @@ async def show_offers(update, category=None, price_filter=None):
                                   reply_markup=offer_buttons(rows, back))
 
 async def button_handler(update, context):
+    """Fault-tolerant callback entrypoint.
+
+    A single Telegram API/edit/DB exception must never leave the user with a
+    dead button or an endless loading spinner.  Channel publishing runs in a
+    separate background task, so this guard does not stop auto publishing.
+    """
+    query = update.callback_query
+    try:
+        await _button_handler_impl(update, context)
+    except Exception as exc:
+        log.exception("Callback handler failed for %s: %s", getattr(query, "data", None), exc)
+        try:
+            if query:
+                await query.answer("Something went wrong. Please try again.", show_alert=True)
+        except Exception:
+            pass
+        try:
+            if query and query.message:
+                await query.message.reply_text(
+                    "⚠️ <b>Temporary reply error</b>\n\n"
+                    "The bot is still running. Please tap the button again.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=main_menu(query.from_user.id) if query and query.from_user else None,
+                )
+        except Exception:
+            pass
+
+async def _button_handler_impl(update, context):
     query = update.callback_query
     await query.answer()
     data = query.data
