@@ -282,7 +282,7 @@ async def membership_status(bot, user_id):
 
     async def check(chat_id, label):
         try:
-            member = await asyncio.wait_for(bot.get_chat_member(chat_id, user_id), timeout=2.0)
+            member = await asyncio.wait_for(bot.get_chat_member(chat_id, user_id), timeout=5.0)
             return member.status in {"member", "administrator", "creator"}
         except Exception as exc:
             log.warning("Membership check failed for %s (%s): %s", label, chat_id, exc)
@@ -400,7 +400,7 @@ async def start(update, context):
 
     try:
         verified = await asyncio.wait_for(
-            membership_status(context.bot, user_id), timeout=3.0
+            membership_status(context.bot, user_id), timeout=8.0
         )
     except Exception as exc:
         log.warning("Start membership check timed out: %s", exc)
@@ -499,7 +499,7 @@ async def _button_handler_impl(update, context):
         # Always re-check Telegram immediately; failed checks are not cached.
         try:
             verified = await asyncio.wait_for(
-                membership_status(context.bot, user_id), timeout=6.0
+                membership_status(context.bot, user_id), timeout=12.0
             )
         except Exception as exc:
             log.exception("Join verification callback failed: %s", exc)
