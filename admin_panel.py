@@ -2,7 +2,7 @@
 import aiosqlite
 import bot
 
-ADMIN_ID = getattr(bot, "ADMIN_ID", "")
+ADMIN_IDS = getattr(bot, "ADMIN_IDS", {getattr(bot, "ADMIN_ID", "")})
 DB_FILE = getattr(bot, "DB_FILE", "zoner_offers.db")
 
 async def set_layout(update, context):
@@ -10,7 +10,7 @@ async def set_layout(update, context):
 
     # Admin-only: never allow normal users to change bot settings.
     user = getattr(query, "from_user", None)
-    if not user or str(getattr(user, "id", "")) != str(ADMIN_ID):
+    if not user or str(getattr(user, "id", "")) not in {str(x) for x in ADMIN_IDS}:
         await query.answer("❌ Admin only.", show_alert=True)
         return
 
