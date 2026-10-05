@@ -309,14 +309,36 @@ def is_admin(update):
 
 async def start(update, context):
     user_id = update.effective_user.id
-    if not await membership_status(context.bot, user_id):
-        await update.message.reply_text(join_gate_text(), parse_mode=ParseMode.HTML, reply_markup=join_gate_markup())
-        return
-    await update.message.reply_text(
-        "🔥 <b>Welcome to Zoner Offers AI!</b>\n\n"
-        "🤖 AI-style deal discovery\n💸 Discounts & price drops\n🔔 Smart deal alerts\n"
-        "🌐 Multiple shopping sources\n\n👇 Choose an option:",
-        parse_mode=ParseMode.HTML, reply_markup=main_menu(user_id))
+
+    # Reply immediately before membership/API checks so /start never appears dead.
+    status_msg = await update.message.reply_text(
+        "⚡ <b>Opening Zoner Offers AI…</b>", parse_mode=ParseMode.HTML
+    )
+
+    try:
+        verified = await asyncio.wait_for(
+            membership_status(context.bot, user_id), timeout=3.0
+        )
+    except Exception as exc:
+        log.warning("Start membership check timed out: %s", exc)
+        verified = False
+
+    try:
+        if not verified:
+            await status_msg.edit_text(
+                join_gate_text(), parse_mode=ParseMode.HTML,
+                reply_markup=join_gate_markup()
+            )
+            return
+
+        await status_msg.edit_text(
+            "🔥 <b>Welcome to Zoner Offers AI!</b>\\n\\n"
+            "🤖 AI-style deal discovery\\n💸 Discounts & price drops\\n🔔 Smart deal alerts\\n"
+            "🌐 Multiple shopping sources\\n\\n👇 Choose an option:",
+            parse_mode=ParseMode.HTML, reply_markup=main_menu(user_id)
+        )
+    except Exception as exc:
+        log.warning("Start response update failed: %s", exc)
 
 async def help_command(update, context):
     await update.message.reply_text(
