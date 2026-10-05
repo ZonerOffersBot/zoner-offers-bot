@@ -58,7 +58,7 @@ async def managed_post_init(app):
 
     task = asyncio.create_task(bot.auto_scan_loop(app), name="zoner-auto-scan")
     app.bot_data["auto_scan_task"] = task
-    log.info("🤖 Autonomous deal scanner started (120s cycle).")
+    log.info("🤖 Autonomous deal scanner started (90s cycle).")
 
 async def managed_post_stop(app):
     task = app.bot_data.pop("auto_scan_task", None)
