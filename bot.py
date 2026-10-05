@@ -26,7 +26,7 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
 CHANNEL_URL = "https://t.me/ZonerOffers"
-SCAN_MINUTES = int(os.getenv("SCAN_MINUTES", "5"))
+SCAN_MINUTES = 5  # fixed: publish a fresh discovered deal every 5 minutes
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 AUTO_POST = os.getenv("AUTO_POST", "1") == "1"
 
