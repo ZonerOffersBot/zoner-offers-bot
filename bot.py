@@ -149,6 +149,7 @@ def init_db():
         score INTEGER DEFAULT 0,
         fingerprint TEXT UNIQUE,
         image_url TEXT DEFAULT '',
+        description TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""")
     con.execute("""CREATE TABLE IF NOT EXISTS subscribers (
@@ -176,6 +177,7 @@ def init_db():
         ("score", "ALTER TABLE offers ADD COLUMN score INTEGER DEFAULT 0"),
         ("fingerprint", "ALTER TABLE offers ADD COLUMN fingerprint TEXT"),
         ("image_url", "ALTER TABLE offers ADD COLUMN image_url TEXT DEFAULT ''"),
+        ("description", "ALTER TABLE offers ADD COLUMN description TEXT DEFAULT ''"),
     ]:
         if name not in existing:
             try:
@@ -525,6 +527,9 @@ def offer_text(row):
         text += f"\n🤖 Deal Score: <b>{row['score']}/100</b>"
     if row["source"]:
         text += f"\n🔎 Source: {html.escape(row['source'])}"
+    description = html.escape((row["description"] or "").strip()) if "description" in row.keys() else ""
+    if description:
+        text += f"\n\n📝 <b>Description:</b> {description[:700]}"
     return text + f"\n🏷️ {category}\n\n⚡ Check price before checkout; offers can change."
 
 def offer_markup(row, back="offers"):
@@ -894,47 +899,49 @@ async def cancel(update, context):
     await update.message.reply_text("❌ <b>Cancelled.</b>", parse_mode=ParseMode.HTML, reply_markup=admin_menu() if is_admin(update) else None)
     return ConversationHandler.END
 
-def insert_offer(title, price, old_price, category, url, source, discount, score, image_url=""):
-    # Category is mandatory for every stored/published link.
+def insert_offer(title, price, old_price, category, url, source, discount, score, image_url="", description=""):
     category = category or guess_category(f"{title} {source} {url}") or "electronics"
+    description = re.sub(r"\s+", " ", html.unescape(description or "")).strip()[:700]
     fp = fingerprint(title, url)
     con = db()
     try:
-        cur = con.execute("""INSERT INTO offers(title,price,old_price,category,url,source,discount,score,fingerprint,image_url)
-                             VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                          (title,price,old_price,category,url,source,discount,score,fp,image_url or ""))
+        cur = con.execute("""INSERT INTO offers(
+            title,price,old_price,category,url,source,discount,score,fingerprint,image_url,description
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                          (title,price,old_price,category,url,source,discount,score,fp,image_url or "",description))
         con.commit(); return cur.lastrowid
     except sqlite3.IntegrityError:
         return None
     finally:
         con.close()
 
-def fetch_product_image(url):
-    """Best-effort product image discovery; image failure can never block publishing."""
+def fetch_product_metadata(url):
+    """Get product title/description/image during discovery, never during publish."""
     try:
-        r = requests.get(
-            url, timeout=4, allow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; ZonerOffersBot/1.0)"}
-        )
+        r = requests.get(url, timeout=7, allow_redirects=True,
+                         headers={"User-Agent":"Mozilla/5.0 (compatible; ZonerOffersBot/1.0)"})
         if not r.ok:
-            return ""
+            return "", "", ""
         soup = BeautifulSoup(r.text, "html.parser")
-        for attrs in (
-            {"property": "og:image"},
-            {"property": "og:image:url"},
-            {"name": "twitter:image"},
-            {"name": "twitter:image:src"},
-        ):
-            tag = soup.find("meta", attrs=attrs)
-            value = (tag.get("content") or "").strip() if tag else ""
-            if value:
-                image = value if value.startswith(("http://", "https://")) else requests.compat.urljoin(r.url, value)
-                host = (urlparse(image).hostname or "").lower()
-                if host and urlparse(image).scheme in {"http", "https"}:
-                    return image[:2000]
+        def meta_value(*attrs_list):
+            for attrs in attrs_list:
+                tag = soup.find("meta", attrs=attrs)
+                value = (tag.get("content") or "").strip() if tag else ""
+                if value:
+                    return value
+            return ""
+        title = meta_value({"property":"og:title"},{"name":"twitter:title"})
+        description = meta_value({"property":"og:description"},{"name":"description"},{"name":"twitter:description"})
+        image = meta_value({"property":"og:image"},{"property":"og:image:url"},{"name":"twitter:image"},{"name":"twitter:image:src"})
+        if image:
+            image = requests.compat.urljoin(r.url, image)
+        return title[:250], description[:700], image[:2000]
     except Exception as exc:
-        log.debug("Product image lookup failed for %s: %s", url, exc)
-    return ""
+        log.debug("Product metadata lookup failed for %s: %s", url, exc)
+        return "", "", ""
+
+def fetch_product_image(url):
+    return fetch_product_metadata(url)[2]
 
 def ensure_offer_image(row):
     """Fill a missing cached image once; never fail the publish cycle."""
@@ -1229,15 +1236,19 @@ async def scan_and_publish(bot, manual=False):
                 if not is_deal_candidate(source, title, url):
                     continue
                 candidate = normalize_candidate(source, title, url)
-                image_url = ""
-                try:
-                    image_url = await asyncio.to_thread(fetch_product_image, candidate["url"])
-                except Exception as exc:
-                    log.debug("New-product image lookup failed: %s", exc)
+                meta_title, description, image_url = await asyncio.to_thread(
+                    fetch_product_metadata, candidate["url"]
+                )
+                if meta_title:
+                    candidate["title"] = meta_title
+                    candidate["discount"] = extract_discount(meta_title) or candidate["discount"]
+                    candidate["price"] = extract_price(meta_title) or candidate["price"]
+                candidate["description"] = description
                 oid = insert_offer(
                     candidate["title"], candidate["price"], candidate["old_price"],
                     candidate["category"], candidate["url"], candidate["source"],
-                    candidate["discount"], candidate["score"], image_url=image_url
+                    candidate["discount"], candidate["score"],
+                    image_url=image_url, description=description
                 )
                 if oid:
                     new_count += 1
