@@ -168,14 +168,31 @@ def subscriber_enabled(user_id):
     con.close()
     return bool(row["enabled"]) if row else False
 
-def get_offers(category=None, limit=20):
+def get_offers(category=None, price_max=None, price_min=None, limit=20):
     con = db()
+    conditions = []
+    params = []
     if category:
-        rows = con.execute("SELECT * FROM offers WHERE category=? ORDER BY id DESC LIMIT ?", (category, limit)).fetchall()
-    else:
-        rows = con.execute("SELECT * FROM offers ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        conditions.append("category=?")
+        params.append(category)
+    conditions.append("CAST(REPLACE(price, ',', '') AS REAL) > 0")
+    if price_min is not None:
+        conditions.append("CAST(REPLACE(price, ',', '') AS REAL) >= ?")
+        params.append(price_min)
+    if price_max is not None:
+        conditions.append("CAST(REPLACE(price, ',', '') AS REAL) <= ?")
+        params.append(price_max)
+    where = " WHERE " + " AND ".join(conditions)
+    params.append(limit)
+    rows = con.execute("SELECT * FROM offers" + where + " ORDER BY id DESC LIMIT ?", params).fetchall()
     con.close()
     return rows
+
+def get_offers_for_view(category=None, price_filter=None, limit=20):
+    if not price_filter:
+        return get_offers(category=category, limit=limit)
+    low, high = price_filter
+    return get_offers(category=category, price_min=low, price_max=high, limit=limit)
 
 def get_offer(offer_id):
     con = db()
@@ -297,9 +314,19 @@ def main_menu(user_id=None):
     notify = "🔔 Notifications ON" if user_id is not None and subscriber_enabled(user_id) else "🔕 Notifications OFF"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🛍️ Latest Deals", callback_data="offers"), InlineKeyboardButton("🏷️ Categories", callback_data="categories")],
+        [InlineKeyboardButton("💰 Price Filter", callback_data="price_filter")],
         [InlineKeyboardButton(notify, callback_data="notifications")],
         [InlineKeyboardButton("🤖 AI Deal Hunter", callback_data="ai_info")],
         [InlineKeyboardButton("🆘 Help", callback_data="help")],
+    ])
+
+def price_filter_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💸 Under ₹500", callback_data="price_500"),
+         InlineKeyboardButton("💸 ₹500–₹1,000", callback_data="price_1000")],
+        [InlineKeyboardButton("💸 ₹1,000–₹5,000", callback_data="price_5000")],
+        [InlineKeyboardButton("💸 ₹5,000+", callback_data="price_5000plus")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="back")],
     ])
 
 def categories_menu():
@@ -398,13 +425,21 @@ async def help_command(update, context):
         "🤖 AI Deal Hunter — how discovery works\n🛒 Buy / View Deal — open source offer.",
         parse_mode=ParseMode.HTML, reply_markup=main_menu(update.effective_user.id))
 
-async def show_offers(update, category=None):
+async def show_offers(update, category=None, price_filter=None):
     query = update.callback_query
-    rows = get_offers(category)
+    rows = get_offers_for_view(category=category, price_filter=price_filter)
     title = CATEGORIES.get(category, "🏷️ Category") if category else "🛍️ Latest Deals"
+    if price_filter:
+        low, high = price_filter
+        if low == 0:
+            title += " • Under ₹500"
+        elif high is None:
+            title += " • ₹5,000+"
+        else:
+            title += f" • ₹{low:,}–₹{high:,}"
     back = "categories" if category else "back"
     if not rows:
-        await query.edit_message_text(f"<b>{html.escape(title)}</b>\n\n😕 No offers here yet.", parse_mode=ParseMode.HTML,
+        await query.edit_message_text(f"<b>{html.escape(title)}</b>\n\n😕 No matching offers yet.", parse_mode=ParseMode.HTML,
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=back)]]))
         return
     await query.edit_message_text(f"<b>{html.escape(title)}</b>\n\n👇 Select a deal:", parse_mode=ParseMode.HTML,
@@ -425,14 +460,23 @@ async def button_handler(update, context):
             await query.answer("Please join the required channel/group first.", show_alert=True)
         return
 
+    # Once verified, this Telegram account is allowed through without another join gate.
     if not is_user_verified(query.from_user.id):
-        if not await membership_status(context.bot, query.from_user.id):
+        verified = await membership_status(context.bot, query.from_user.id)
+        if not verified:
             await query.edit_message_text(join_gate_text(), parse_mode=ParseMode.HTML, reply_markup=join_gate_markup())
             return
+        mark_user_verified(query.from_user.id)
 
     if data == "offers": await show_offers(update); return
     if data == "categories":
         await query.edit_message_text("🏷️ <b>Offer Categories</b>\n\nChoose a category:", parse_mode=ParseMode.HTML, reply_markup=categories_menu()); return
+    if data == "price_filter":
+        await query.edit_message_text("💰 <b>Filter Offers by Price</b>\n\nChoose a price range:", parse_mode=ParseMode.HTML, reply_markup=price_filter_menu()); return
+    if data == "price_500": await show_offers(update, price_filter=(0, 500)); return
+    if data == "price_1000": await show_offers(update, price_filter=(500, 1000)); return
+    if data == "price_5000": await show_offers(update, price_filter=(1000, 5000)); return
+    if data == "price_5000plus": await show_offers(update, price_filter=(5000, None)); return
     if data.startswith("cat_"): await show_offers(update, data[4:]); return
     if data == "ai_info":
         await query.edit_message_text(
