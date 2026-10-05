@@ -661,19 +661,39 @@ def normalize_candidate(source, title, url):
     }
 
 async def publish_offer(bot, row):
+    """Publish to channels first, with short retries, then notify subscribers."""
     text = "🤖 <b>AI Deal Alert</b>\n\n" + offer_text(row)
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy / View Deal", url=row["url"])]])
-    con = db(); users = con.execute("SELECT user_id FROM subscribers WHERE enabled=1").fetchall(); con.close()
-    for user in users:
-        try: await bot.send_message(user["user_id"], text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
-        except Exception as exc: log.debug("Notify failed %s: %s", user["user_id"], exc)
     if AUTO_POST:
         for channel in POST_CHANNELS:
-            try:
-                await bot.send_message(channel, text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
-                log.info("Posted deal to %s", channel)
-            except Exception as exc:
-                log.warning("Channel post failed for %s: %s", channel, exc)
+            posted = False
+            for attempt in range(3):
+                try:
+                    await bot.send_message(
+                        channel, text=text, parse_mode=ParseMode.HTML,
+                        reply_markup=markup, read_timeout=8, write_timeout=8
+                    )
+                    log.info("Posted deal to %s", channel)
+                    posted = True
+                    break
+                except Exception as exc:
+                    log.warning("Channel post failed for %s (attempt %s/3): %s", channel, attempt + 1, exc)
+                    if attempt < 2:
+                        await asyncio.sleep(1)
+            if not posted:
+                log.error("Giving up channel post for %s after 3 attempts", channel)
+
+    con = db()
+    users = con.execute("SELECT user_id FROM subscribers WHERE enabled=1").fetchall()
+    con.close()
+    for user in users:
+        try:
+            await bot.send_message(
+                user["user_id"], text=text, parse_mode=ParseMode.HTML,
+                reply_markup=markup, read_timeout=8, write_timeout=8
+            )
+        except Exception as exc:
+            log.debug("Notify failed %s: %s", user["user_id"], exc)
 
 async def scan_and_publish(bot, manual=False):
     """Run one discovery cycle and publish one fresh deal link."""
