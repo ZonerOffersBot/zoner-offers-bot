@@ -24,6 +24,7 @@ from telegram.ext import (
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+POST_CHANNELS = [x.strip() for x in os.getenv("POST_CHANNELS", "@zoneroffers,@offerleloturant").split(",") if x.strip()]
 GROUP_ID = os.getenv("GROUP_ID")
 GROUP_URL = os.getenv("GROUP_URL", "")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
@@ -560,9 +561,13 @@ async def publish_offer(bot, row):
     for user in users:
         try: await bot.send_message(user["user_id"], text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
         except Exception as exc: log.debug("Notify failed %s: %s", user["user_id"], exc)
-    if CHANNEL_ID and AUTO_POST:
-        try: await bot.send_message(CHANNEL_ID, text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
-        except Exception as exc: log.warning("Channel post failed: %s", exc)
+    if AUTO_POST:
+        for channel in POST_CHANNELS:
+            try:
+                await bot.send_message(channel, text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                log.info("Posted deal to %s", channel)
+            except Exception as exc:
+                log.warning("Channel post failed for %s: %s", channel, exc)
 
 async def scan_and_publish(bot, manual=False):
     """Run one discovery cycle and publish one fresh deal link."""
