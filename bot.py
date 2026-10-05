@@ -1188,6 +1188,45 @@ async def add_menu_item(update, context):
         parse_mode=ParseMode.HTML,
     )
 
+async def set_interval_command(update, context):
+    """Admin-only: persist the auto-post interval without redeploying."""
+    if not is_admin(update):
+        return
+    args = getattr(context, "args", []) or []
+    if not args:
+        current = get_setting_sync("post_interval", SCAN_SECONDS)
+        await update.message.reply_text(
+            f"⏰ Current post interval: <b>{current} seconds</b>\\n"
+            "Use: <code>/setinterval 1800</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    try:
+        seconds = int(args[0])
+    except (TypeError, ValueError):
+        await update.message.reply_text("❌ Interval must be a number of seconds.")
+        return
+    if not 30 <= seconds <= 86400:
+        await update.message.reply_text("❌ Interval must be between 30 and 86400 seconds.")
+        return
+    con = db()
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        con.execute(
+            "INSERT INTO settings(key, value) VALUES('post_interval', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(seconds),),
+        )
+        con.commit()
+    finally:
+        con.close()
+    await update.message.reply_text(
+        f"✅ Auto-post interval set to <b>{seconds} seconds</b>.",
+        parse_mode=ParseMode.HTML,
+    )
+
 async def admin_help(update, context):
     if not is_admin(update): return
     await update.message.reply_text("🔐 <b>Zoner AI Admin</b>\n\n🤖 Auto-scanning is enabled. Use the panel to scan manually or manage offers.",
