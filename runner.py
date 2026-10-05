@@ -47,7 +47,7 @@ async def managed_post_init(app):
 
     task = asyncio.create_task(bot.auto_scan_loop(app), name="zoner-auto-scan")
     app.bot_data["auto_scan_task"] = task
-    log.info("🤖 Autonomous deal scanner started (configured interval).")
+    # Run the force-join self-test at startup so Render logs immediately show\n    # whether the configured channel can be resolved and the bot is an admin.\n    await bot.force_join_diagnostics(app.bot)\n    log.info("🤖 Autonomous deal scanner started (configured interval).")
 
 
 async def managed_post_stop(app):
