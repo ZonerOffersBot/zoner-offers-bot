@@ -25,7 +25,11 @@ from telegram.ext import (
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-POST_CHANNELS = [x.strip() for x in os.getenv("POST_CHANNELS", "@zoneroffers,@offerleloturant").split(",") if x.strip()]
+# Required publication targets are enforced in code so a stale Render env var
+# cannot silently disable either channel.
+_REQUIRED_POST_CHANNELS = ["@zoneroffers", "@offerleloturant"]
+_env_post_channels = [x.strip() for x in os.getenv("POST_CHANNELS", "").split(",") if x.strip()]
+POST_CHANNELS = list(dict.fromkeys(_REQUIRED_POST_CHANNELS + _env_post_channels))
 GROUP_ID = os.getenv("GROUP_ID")
 GROUP_URL = os.getenv("GROUP_URL", "")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
@@ -33,7 +37,7 @@ CHANNEL_URL = "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
 SCAN_SECONDS = 120  # scan every 2 minutes
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
-AUTO_POST = os.getenv("AUTO_POST", "1") == "1"
+AUTO_POST = True  # Channel publishing is the bot's highest-priority job.
 
 CATEGORIES = {
     "electronics": "📱 Electronics",
@@ -755,8 +759,16 @@ async def publish_offer(bot, row):
             log.debug("Notify failed %s: %s", user["user_id"], exc)
 
 async def scan_and_publish(bot, manual=False):
-    """Run one discovery cycle and publish one fresh deal link."""
-    candidates = await asyncio.to_thread(discover_candidates)
+    """Run one discovery cycle and publish one fresh deal link.
+    Discovery failures must never block the guaranteed shopping fallback.
+    """
+    try:
+        candidates = await asyncio.wait_for(
+            asyncio.to_thread(discover_candidates), timeout=45
+        )
+    except Exception as exc:
+        log.exception("Discovery unavailable; switching immediately to fallback: %s", exc)
+        candidates = []
     added = 0; skipped = 0
     seen = set()
     normalized = []
@@ -817,9 +829,7 @@ async def scan_and_publish(bot, manual=False):
     return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: {len(candidates)}"
 
 async def auto_scan_loop(app):
-    # Start quickly, then keep the cycle anchored to the clock so discovery
-    # time does not add another 30 seconds of delay.
-    await asyncio.sleep(3)
+    # Publish immediately after startup; never wait for the first 2-minute cycle.
     while True:
         cycle_started = asyncio.get_running_loop().time()
         try:
