@@ -1050,6 +1050,78 @@ async def auto_scan_loop(app):
         elapsed = asyncio.get_running_loop().time() - cycle_started
         await asyncio.sleep(max(1.0, SCAN_SECONDS - elapsed))
 
+async def add_menu_item(update, context):
+    """Admin-only: add a custom main-menu item.
+
+    Usage:
+      /addmenu Latest Offers|latest_offers|1|1
+    """
+    if not is_admin(update):
+        await update.message.reply_text("❌ Admin only.")
+        return
+
+    args = getattr(context, "args", []) or []
+    if not args:
+        await update.message.reply_text(
+            "❌ Format:\n/addmenu Label|callback_data|row|column\n\n"
+            "Example:\n/addmenu Latest Offers|latest_offers|1|1"
+        )
+        return
+
+    raw = " ".join(args)
+    parts = raw.split("|")
+    if len(parts) != 4:
+        await update.message.reply_text(
+            "❌ Invalid format. Use:\n/addmenu Label|callback_data|row|column"
+        )
+        return
+
+    label, cb_data, row, col = [part.strip() for part in parts]
+    if not label or not cb_data:
+        await update.message.reply_text("❌ Label and callback_data are required.")
+        return
+
+    try:
+        row = int(row)
+        col = int(col)
+        if row < 1 or col < 1:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Row and column must be positive numbers.")
+        return
+
+    con = db()
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS menu_items ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "label TEXT NOT NULL, "
+            "callback_data TEXT NOT NULL, "
+            "row_position INTEGER NOT NULL DEFAULT 1, "
+            "col_position INTEGER NOT NULL DEFAULT 1, "
+            "is_active INTEGER NOT NULL DEFAULT 1)"
+        )
+        con.execute(
+            "INSERT INTO menu_items "
+            "(label, callback_data, row_position, col_position, is_active) "
+            "VALUES (?, ?, ?, ?, 1)",
+            (label, cb_data, row, col),
+        )
+        con.commit()
+    except sqlite3.IntegrityError as exc:
+        con.rollback()
+        log.warning("Menu item insert rejected: %s", exc)
+        await update.message.reply_text("❌ Menu item could not be added.")
+        return
+    finally:
+        con.close()
+
+    await update.message.reply_text(
+        f"✅ Menu item '<b>{html.escape(label)}</b>' added!\n"
+        f"📍 Row: {row} • Column: {col}",
+        parse_mode=ParseMode.HTML,
+    )
+
 async def admin_help(update, context):
     if not is_admin(update): return
     await update.message.reply_text("🔐 <b>Zoner AI Admin</b>\n\n🤖 Auto-scanning is enabled. Use the panel to scan manually or manage offers.",
