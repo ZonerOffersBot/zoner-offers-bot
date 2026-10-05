@@ -264,47 +264,32 @@ _membership_cache = {}
 MEMBERSHIP_CACHE_SECONDS = 0
 
 async def membership_status(bot, user_id):
-    # One-time verification: once a user has successfully joined, do not ask
-    # Telegram again on every /start or button click.
+    # Lifetime verification: once a user has passed the mandatory channel
+    # check, never ask Telegram to verify them again.
     if is_user_verified(user_id):
         return True
 
-    # Always perform a fresh check until the user is successfully verified.
-    # This prevents a failed check before joining from blocking the user for minutes.
-    now = asyncio.get_running_loop().time()
-
-    required = [
-        ("@zoneroffers", "channel 1"),
-        ("@offerleloturant", "channel 2"),
-    ]
-    # The two public channels are the only mandatory join checks.
-    # GROUP_ID is optional and must never silently block users when its
-    # invite URL/config is stale or missing.
-    if GROUP_ID and GROUP_URL:
-        required.append((GROUP_ID, "group"))
-
-    async def check(chat_id, label):
-        try:
-            member = await asyncio.wait_for(bot.get_chat_member(chat_id, user_id), timeout=5.0)
-            status = str(getattr(member, "status", "")).lower()
-            # Any active membership state is accepted. "restricted" is a
-            # legitimate Telegram membership state and must not be rejected.
-            return status in {"member", "administrator", "creator", "restricted"}
-        except Exception as exc:
-            log.warning("Membership check failed for %s (%s): %s", label, chat_id, exc)
-            return False
-
-    checks = await asyncio.gather(*(check(chat_id, label) for chat_id, label in required))
-    result = bool(checks) and all(checks)
-    if result:
-        # Lifetime verification: future /start and buttons skip the join gate.
-        mark_user_verified(user_id)
-        _membership_cache[user_id] = (now, True)
-    else:
-        # Never cache failures; the user may have just joined.
-        _membership_cache.pop(user_id, None)
-    return result
-
+    # Only the configured mandatory channel is required for verification.
+    # Publishing channels must NEVER become verification requirements.
+    required_channel = (CHANNEL_ID or "@zoneroffers").strip()
+    try:
+        member = await asyncio.wait_for(
+            bot.get_chat_member(required_channel, user_id), timeout=6.0
+        )
+        status = str(getattr(member, "status", "")).lower()
+        verified = status in {"member", "administrator", "creator"} or (
+            status == "restricted" and bool(getattr(member, "is_member", False))
+        )
+        if verified:
+            mark_user_verified(user_id)
+        else:
+            log.warning("Verification rejected: channel=%s status=%s user=%s",
+                        required_channel, status, user_id)
+        return verified
+    except Exception as exc:
+        log.warning("Mandatory-channel membership check failed for %s user=%s: %s",
+                    required_channel, user_id, exc)
+        return False
 def join_gate_markup():
     rows = [[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_URL)]]
     if GROUP_ID and GROUP_URL:
