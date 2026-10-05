@@ -54,6 +54,8 @@ def build_app():
         .get_updates_connection_pool_size(8)
         .get_updates_pool_timeout(2)
         .get_updates_connect_timeout(5)
+        .get_updates_read_timeout(15)
+        .get_updates_write_timeout(5)
         .post_init(managed_post_init)
         .post_stop(managed_post_stop)
         .build()
@@ -87,7 +89,7 @@ def run():
     bot.Thread(target=bot.run_health_server, daemon=True).start()
     app = build_app()
     log.info("🔥 Zoner Offers AI fast runner is starting.")
-    app.run_polling(poll_interval=0.0, timeout=3, bootstrap_retries=3)
+    app.run_polling(poll_interval=0.0, timeout=10, bootstrap_retries=-1)
 
 if __name__ == "__main__":
     run()
