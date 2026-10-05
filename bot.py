@@ -57,31 +57,30 @@ PLATFORM_DOMAINS = {
     "Ajio": {"ajio.com", "www.ajio.com"},
     "SHEIN": {"sheinindia.in", "www.sheinindia.in"},
 }
+# These are preferred sources, not a hard allow-list. Generic discovery can
+# publish legitimate shopping sites outside this list too.
 PLATFORM_QUERIES = [
-    ("Amazon", "Amazon India product deal discount"),
-    ("Flipkart", "Flipkart India product deal discount"),
-    ("Swiggy", "Swiggy Instamart India deal discount"),
-    ("Blinkit", "Blinkit India product deal discount"),
-    ("BigBasket", "BigBasket India product deal discount"),
-    ("Meesho", "Meesho India product deal discount"),
-    ("Myntra", "Myntra India product sale discount"),
-    ("Ajio", "AJIO India product sale discount"),
-    ("SHEIN", "SHEIN India product sale discount"),
+    ("Amazon", "Amazon India deals products discounts"),
+    ("Flipkart", "Flipkart India deals products discounts"),
+    ("Web Shopping", "India online shopping product deals discounts"),
+    ("Web Shopping", "India electronics fashion home product sale offer"),
+    ("Web Shopping", "India online shopping coupon price drop product"),
+    ("Web Shopping", "best product deals India shopping sale"),
 ]
 DISCOVERY_QUERIES = PLATFORM_QUERIES
 
-# Guaranteed valid shopping fallback links. These are listing/search URLs on the
-# same allow-listed platforms, used only when discovery feeds return no fresh URL.
+# Valid fallback shopping/search pages across multiple legitimate retailers.
 FALLBACK_PRODUCTS = [
     ("Amazon", "Wireless Earbuds", "https://www.amazon.in/s?k=wireless+earbuds"),
     ("Flipkart", "Wireless Earbuds", "https://www.flipkart.com/search?q=wireless%20earbuds"),
     ("Myntra", "Men Sneakers", "https://www.myntra.com/men-sneakers"),
-    ("Ajio", "Sneakers", "https://www.ajio.com/search/?text=sneakers"),
-    ("Meesho", "Kitchen Products", "https://www.meesho.com/search?q=kitchen"),
-    ("BigBasket", "Grocery Deals", "https://www.bigbasket.com/ps/?q=deals"),
-    ("Blinkit", "Grocery", "https://blinkit.com/s/?q=groceries"),
-    ("Swiggy", "Instamart", "https://www.swiggy.com/instamart"),
-    ("SHEIN", "Fashion", "https://www.sheinindia.in/search?q=fashion"),
+    ("AJIO", "Sneakers", "https://www.ajio.com/search/?text=sneakers"),
+    ("Tata CLiQ", "Electronics Deals", "https://www.tatacliq.com/search/?searchCategory=all&text=deals"),
+    ("Nykaa", "Beauty Offers", "https://www.nykaa.com/search/result/?q=offers"),
+    ("Croma", "Electronics", "https://www.croma.com/search/?text=electronics"),
+    ("Reliance Digital", "Electronics", "https://www.reliancedigital.in/search?q=electronics"),
+    ("Decathlon", "Sports Products", "https://www.decathlon.in/search?query=sports"),
+    ("FirstCry", "Kids Products", "https://www.firstcry.com/search?q=toys"),
 ]
 
 logging.basicConfig(
@@ -554,18 +553,25 @@ def fetch_feed(source, query):
     return items
 
 def resolve_platform_url(url, source):
-    """Follow Google News redirects, then accept ONLY the configured shopping platform domain."""
+    """Follow redirects and accept legitimate shopping URLs from any retailer."""
     try:
-        host = (urlparse(url).hostname or "").lower()
-        allowed = PLATFORM_DOMAINS.get(source, set())
-        if host in allowed:
-            return url
-        r = requests.get(url, timeout=8, allow_redirects=True,
-                         headers={"User-Agent": "ZonerOffersBot/1.0"})
+        r = requests.get(
+            url, timeout=8, allow_redirects=True,
+            headers={"User-Agent": "ZonerOffersBot/1.0"}
+        )
         final_url = r.url
-        final_host = (urlparse(final_url).hostname or "").lower()
-        if final_host in allowed:
-            return final_url
+        parsed = urlparse(final_url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in {"http", "https"} or not host:
+            return ""
+        blocked = {
+            "news.google.com", "google.com", "youtube.com", "youtu.be",
+            "facebook.com", "instagram.com", "x.com", "twitter.com",
+            "t.me", "telegram.me"
+        }
+        if host in blocked or any(host.endswith("." + h) for h in blocked):
+            return ""
+        return final_url
     except Exception as exc:
         log.debug("URL resolution failed for %s: %s", source, exc)
     return ""
@@ -607,26 +613,36 @@ def discover_candidates():
 
 def is_deal_candidate(source, title, url):
     text = (title + " " + url).lower()
-    source_words = {
-        "amazon": ["amazon"],
-        "flipkart": ["flipkart"],
-        "swiggy": ["swiggy", "instamart"],
-        "blinkit": ["blinkit"],
-        "bigbasket": ["bigbasket"],
-        "meesho": ["meesho"],
-        "myntra": ["myntra"],
-        "ajio": ["ajio"],
-        "shein": ["shein", "sheinindia"],
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in {"http", "https"} or not host:
+        return False
+
+    # Generic web-shopping mode: accept any plausible retailer/product URL,
+    # while rejecting obvious social, messaging, search and publisher hosts.
+    blocked = {
+        "news.google.com", "google.com", "youtube.com", "youtu.be",
+        "facebook.com", "instagram.com", "x.com", "twitter.com",
+        "t.me", "telegram.me", "wikipedia.org"
     }
-    terms = source_words.get(source.lower(), [])
-    if terms and not any(t in text for t in terms):
+    if host in blocked or any(host.endswith("." + h) for h in blocked):
         return False
-    # Final safety check: never publish a non-whitelisted shopping URL.
-    host = (urlparse(url).hostname or "").lower()
-    if host not in PLATFORM_DOMAINS.get(source, set()):
-        return False
+
+    shopping_terms = (
+        "shop", "store", "product", "products", "deal", "deals", "offer",
+        "offers", "sale", "discount", "coupon", "price", "buy", "cart",
+        "checkout", "fashion", "electronics", "grocery", "beauty"
+    )
     deal_terms = ("deal", "offer", "sale", "discount", "off", "coupon", "price drop", "lowest", "save")
-    return any(t in text for t in deal_terms) or extract_discount(title) > 0
+    path_text = (parsed.path + " " + parsed.query).lower()
+    has_shopping_signal = any(t in text for t in shopping_terms) or any(
+        t in path_text for t in shopping_terms
+    )
+    has_deal_signal = any(t in text for t in deal_terms) or extract_discount(title) > 0
+
+    # For generic discovery, require a shopping/product signal so ordinary
+    # news/blog links are not posted as deals.
+    return has_shopping_signal and has_deal_signal
 
 def normalize_candidate(source, title, url):
     clean = re.sub(r"\s+", " ", html.unescape(title)).strip()
