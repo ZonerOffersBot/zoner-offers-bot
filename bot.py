@@ -1388,7 +1388,7 @@ async def auto_scan_loop(app):
 
         try:
             interval = int(get_setting_sync("post_interval", SCAN_SECONDS))
-            interval = max(1, min(interval, 86400))
+            interval = max(30, min(interval, 86400))
         except (TypeError, ValueError):
             interval = SCAN_SECONDS
 
