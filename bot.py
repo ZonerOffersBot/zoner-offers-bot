@@ -27,7 +27,7 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 GROUP_ID = os.getenv("GROUP_ID")
 GROUP_URL = os.getenv("GROUP_URL", "")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
-CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/ZonerOffers")
+CHANNEL_URL = os.getenv("CHANNEL_URL") or "https://t.me/ZonerOffers"
 SCAN_MINUTES = 5  # fixed: publish a fresh discovered deal every 5 minutes
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 AUTO_POST = os.getenv("AUTO_POST", "1") == "1"
@@ -186,10 +186,8 @@ async def membership_status(bot, user_id):
     return bool(checks) and all(checks)
 
 def join_gate_markup():
-    rows = []
-    if CHANNEL_URL:
-        rows.append([InlineKeyboardButton("📢 Join Channel", url=CHANNEL_URL)])
-    if GROUP_URL:
+    rows = [[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_URL)]]
+    if GROUP_ID and GROUP_URL:
         rows.append([InlineKeyboardButton("👥 Join Group", url=GROUP_URL)])
     rows.append([InlineKeyboardButton("✅ I Joined — Check Again", callback_data="check_join")])
     return InlineKeyboardMarkup(rows)
@@ -197,7 +195,7 @@ def join_gate_markup():
 def join_gate_text():
     return (
         "🔐 <b>Join Required</b>\\n\\n"
-        "Zoner Offers AI use karne se pehle hamare channel"
+        "Zoner Offers AI use karne se pehle hamare <b>channel</b>"
         + (" <b>aur group</b>" if GROUP_ID else "")
         + " ko join karein.\\n\\n"
         "Join karne ke baad <b>✅ I Joined — Check Again</b> dabayein."
@@ -207,7 +205,8 @@ def main_menu(user_id=None):
     notify = "🔔 Notifications ON" if user_id is not None and subscriber_enabled(user_id) else "🔕 Notifications OFF"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🛍️ Latest Deals", callback_data="offers"), InlineKeyboardButton("🏷️ Categories", callback_data="categories")],
-        [InlineKeyboardButton(notify, callback_data="notifications"), InlineKeyboardButton("📢 Join Channel", url=CHANNEL_URL)],
+        [InlineKeyboardButton(notify, callback_data="notifications")],
+        [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_URL)],
         [InlineKeyboardButton("🤖 AI Deal Hunter", callback_data="ai_info")],
         [InlineKeyboardButton("🆘 Help", callback_data="help")],
     ])
