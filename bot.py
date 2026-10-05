@@ -26,7 +26,7 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
 CHANNEL_URL = "https://t.me/ZonerOffers"
-SCAN_MINUTES = int(os.getenv("SCAN_MINUTES", "30"))
+SCAN_MINUTES = int(os.getenv("SCAN_MINUTES", "5"))
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 AUTO_POST = os.getenv("AUTO_POST", "1") == "1"
 
@@ -469,27 +469,47 @@ async def publish_offer(bot, row):
         except Exception as exc: log.warning("Channel post failed: %s", exc)
 
 async def scan_and_publish(bot, manual=False):
+    """Run one discovery cycle and publish one fresh deal link."""
     candidates = await asyncio.to_thread(discover_candidates)
     added = 0; skipped = 0
     seen = set()
+    normalized = []
+
     for raw in candidates:
         if not is_deal_candidate(raw[0], raw[1], raw[2]):
             skipped += 1
             continue
         c = normalize_candidate(raw[0], raw[1], raw[2])
         key = fingerprint(c["title"], c["url"])
-        if key in seen: skipped += 1; continue
+        if key in seen:
+            skipped += 1
+            continue
         seen.add(key)
-        if c["score"] < MIN_DEAL_SCORE:
-            skipped += 1; continue
-        oid = insert_offer(c["title"], c["price"], c["old_price"], c["category"], c["url"], c["source"], c["discount"], c["score"])
-        if not oid:
-            skipped += 1; continue
-        row = get_offer(oid)
-        await publish_offer(bot, row)
-        added += 1
-        if added >= 8: break
-    return f"Added: {added}\nFiltered/duplicate: {skipped}\nCandidates checked: {len(candidates)}"
+        normalized.append(c)
+
+    # Highest quality first so the channel gets one useful link per cycle.
+    normalized.sort(key=lambda x: x["score"], reverse=True)
+    selected = next((x for x in normalized if x["score"] >= MIN_DEAL_SCORE), None)
+
+    # If no strong deal was found, still share the best fresh discovered link.
+    # Never invent a product URL; only use a URL returned by discovery.
+    if selected is None and normalized:
+        selected = normalized[0]
+
+    if selected:
+        oid = insert_offer(
+            selected["title"], selected["price"], selected["old_price"],
+            selected["category"], selected["url"], selected["source"],
+            selected["discount"], selected["score"]
+        )
+        if oid:
+            row = get_offer(oid)
+            await publish_offer(bot, row)
+            added = 1
+        else:
+            skipped += 1
+
+    return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: {len(candidates)}"
 
 async def auto_scan_loop(app):
     await asyncio.sleep(15)
