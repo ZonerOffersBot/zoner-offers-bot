@@ -24,8 +24,10 @@ from telegram.ext import (
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+GROUP_ID = os.getenv("GROUP_ID")
+GROUP_URL = os.getenv("GROUP_URL", "")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
-CHANNEL_URL = "https://t.me/ZonerOffers"
+CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/ZonerOffers")
 SCAN_MINUTES = 5  # fixed: publish a fresh discovered deal every 5 minutes
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 AUTO_POST = os.getenv("AUTO_POST", "1") == "1"
@@ -170,6 +172,37 @@ def score_deal(title, discount, source):
     if source.lower() in {"amazon", "flipkart"}: score += 10
     return min(score, 100)
 
+async def membership_status(bot, user_id):
+    checks = []
+    for chat_id, label in ((CHANNEL_ID, "channel"), (GROUP_ID, "group")):
+        if not chat_id:
+            continue
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+            checks.append(member.status in {"member", "administrator", "creator"})
+        except Exception as exc:
+            log.warning("Membership check failed for %s: %s", label, exc)
+            checks.append(False)
+    return bool(checks) and all(checks)
+
+def join_gate_markup():
+    rows = []
+    if CHANNEL_URL:
+        rows.append([InlineKeyboardButton("📢 Join Channel", url=CHANNEL_URL)])
+    if GROUP_URL:
+        rows.append([InlineKeyboardButton("👥 Join Group", url=GROUP_URL)])
+    rows.append([InlineKeyboardButton("✅ I Joined — Check Again", callback_data="check_join")])
+    return InlineKeyboardMarkup(rows)
+
+def join_gate_text():
+    return (
+        "🔐 <b>Join Required</b>\\n\\n"
+        "Zoner Offers AI use karne se pehle hamare channel"
+        + (" <b>aur group</b>" if GROUP_ID else "")
+        + " ko join karein.\\n\\n"
+        "Join karne ke baad <b>✅ I Joined — Check Again</b> dabayein."
+    )
+
 def main_menu(user_id=None):
     notify = "🔔 Notifications ON" if user_id is not None and subscriber_enabled(user_id) else "🔕 Notifications OFF"
     return InlineKeyboardMarkup([
@@ -226,11 +259,15 @@ def is_admin(update):
     return bool(ADMIN_ID and update.effective_user and str(update.effective_user.id) == str(ADMIN_ID))
 
 async def start(update, context):
+    user_id = update.effective_user.id
+    if not await membership_status(context.bot, user_id):
+        await update.message.reply_text(join_gate_text(), parse_mode=ParseMode.HTML, reply_markup=join_gate_markup())
+        return
     await update.message.reply_text(
         "🔥 <b>Welcome to Zoner Offers AI!</b>\n\n"
         "🤖 AI-style deal discovery\n💸 Discounts & price drops\n🔔 Smart deal alerts\n"
         "🌐 Multiple shopping sources\n\n👇 Choose an option:",
-        parse_mode=ParseMode.HTML, reply_markup=main_menu(update.effective_user.id))
+        parse_mode=ParseMode.HTML, reply_markup=main_menu(user_id))
 
 async def help_command(update, context):
     await update.message.reply_text(
@@ -256,6 +293,19 @@ async def button_handler(update, context):
     query = update.callback_query
     await query.answer()
     data = query.data
+
+    if data == "check_join":
+        if await membership_status(context.bot, query.from_user.id):
+            await query.edit_message_text(
+                "✅ <b>Membership verified!</b>\n\n🔥 Welcome to Zoner Offers AI. Choose an option:",
+                parse_mode=ParseMode.HTML, reply_markup=main_menu(query.from_user.id))
+        else:
+            await query.answer("Please join the required channel/group first.", show_alert=True)
+        return
+
+    if not await membership_status(context.bot, query.from_user.id):
+        await query.edit_message_text(join_gate_text(), parse_mode=ParseMode.HTML, reply_markup=join_gate_markup())
+        return
 
     if data == "offers": await show_offers(update); return
     if data == "categories":
