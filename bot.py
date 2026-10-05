@@ -1039,16 +1039,28 @@ async def scan_and_publish(bot, manual=False):
     return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: {len(candidates)}"
 
 async def auto_scan_loop(app):
-    # Publish immediately after startup; never wait for the first 2-minute cycle.
+    """Single production publishing loop with admin-configurable interval.
+
+    The runner starts only this loop, preventing duplicate APScheduler jobs.
+    The interval is read from the live bot database every cycle, so an admin
+    change takes effect without redeploying or interrupting publishing.
+    """
     while True:
         cycle_started = asyncio.get_running_loop().time()
         try:
             result = await scan_and_publish(app.bot)
-            log.info("AI scan: %s", result.replace("\n"," | "))
+            log.info("AI scan: %s", result.replace("\n", " | "))
         except Exception:
             log.exception("AI scan failed")
+
+        try:
+            interval = int(get_setting_sync("post_interval", SCAN_SECONDS))
+            interval = max(30, min(interval, 86400))
+        except (TypeError, ValueError):
+            interval = SCAN_SECONDS
+
         elapsed = asyncio.get_running_loop().time() - cycle_started
-        await asyncio.sleep(max(1.0, SCAN_SECONDS - elapsed))
+        await asyncio.sleep(max(1.0, interval - elapsed))
 
 async def add_menu_item(update, context):
     """Admin-only: add a custom main-menu item.
