@@ -29,7 +29,7 @@ GROUP_URL = os.getenv("GROUP_URL", "")
 DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
 CHANNEL_URL = "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
-SCAN_SECONDS = 10  # publish a fresh discovered deal every 10 seconds
+SCAN_SECONDS = 30  # publish a fresh discovered deal every 30 seconds
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 AUTO_POST = os.getenv("AUTO_POST", "1") == "1"
 
