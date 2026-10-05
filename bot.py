@@ -517,10 +517,25 @@ async def _button_handler_impl(update, context):
                 reply_markup=main_menu(user_id)
             )
         else:
-            await query.answer(
-                "Please join BOTH required channels, then press Check Again.",
-                show_alert=True
-            )
+            # callback was already answered at the top of this handler;
+            # answering it a second time causes Telegram BadRequest and makes
+            # the button appear completely dead. Update the message instead.
+            try:
+                await query.edit_message_text(
+                    "🔐 <b>Join verification not complete</b>\n\n"
+                    "Please make sure you have joined BOTH required channels, "
+                    "then press <b>✅ I Joined — Check Again</b> again.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=join_gate_markup()
+                )
+            except Exception as exc:
+                log.warning("Could not refresh join gate: %s", exc)
+                try:
+                    await query.message.reply_text(
+                        "⚠️ Verification not complete. Join both channels and tap Check Again."
+                    )
+                except Exception:
+                    pass
         return
 
     # Once verified, this Telegram account is allowed through without another join gate.
