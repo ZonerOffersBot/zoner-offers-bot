@@ -51,8 +51,10 @@ _env_post_channels = [x.strip() for x in os.getenv("POST_CHANNELS", "").split(",
 POST_CHANNELS = list(dict.fromkeys(_REQUIRED_POST_CHANNELS + _env_post_channels))
 GROUP_ID = os.getenv("GROUP_ID")
 GROUP_URL = os.getenv("GROUP_URL", "")
-DB_FILE = os.getenv("DB_FILE", "zoner_offers.db")
-CHANNEL_URL = "https://t.me/zoneroffers"
+# Keep verification/deal state on a configured persistent path when available.
+# Render can supply DB_FILE (for example a mounted persistent-disk path).
+DB_FILE = os.getenv("DB_FILE", "/var/data/zoner_offers.db" if os.path.isdir("/var/data") else "zoner_offers.db")
+CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/zoneroffers").strip() or "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
 try:
     SCAN_SECONDS = max(30, min(int(os.getenv("SCAN_SECONDS", "120")), 86400))
@@ -308,14 +310,21 @@ def required_channel_url():
     return "https://t.me/" + ref[1:] if ref.startswith("@") else CHANNEL_URL
 
 async def membership_status(bot, user_id):
-    # Lifetime verification fast-path.
+    # Lifetime verification fast-path. Once stored, Telegram is never queried
+    # again for that user, so a valid verification cannot randomly flip back.
     if is_user_verified(user_id):
         return True
 
     required_channel = required_channel_ref()
     try:
+        # Resolve the channel first. This catches a wrong/private invite-link
+        # configuration early and gives a useful diagnostic in Render logs.
+        chat = await asyncio.wait_for(
+            bot.get_chat(chat_id=required_channel),
+            timeout=8.0
+        )
         member = await asyncio.wait_for(
-            bot.get_chat_member(chat_id=required_channel, user_id=user_id),
+            bot.get_chat_member(chat_id=chat.id, user_id=user_id),
             timeout=8.0
         )
         status = str(getattr(member, "status", "")).lower()
@@ -325,8 +334,8 @@ async def membership_status(bot, user_id):
         )
         if verified:
             mark_user_verified(user_id)
-            log.info("Force-join verified user=%s channel=%s status=%s",
-                     user_id, required_channel, status)
+            log.info("Force-join verified user=%s channel=%s chat_id=%s status=%s",
+                     user_id, required_channel, chat.id, status)
         else:
             log.info("Force-join rejected user=%s channel=%s status=%s is_member=%s",
                      user_id, required_channel, status, is_member)
@@ -338,6 +347,32 @@ async def membership_status(bot, user_id):
         log.warning(
             "Force-join API check failed channel=%s user=%s: %s (%s)",
             required_channel, user_id, exc, type(exc).__name__
+        )
+        return False
+
+async def force_join_diagnostics(bot):
+    """Log exact required-channel configuration/permissions at startup."""
+    required = required_channel_ref()
+    if required.startswith(("https://", "http://", "t.me/")) or required.startswith("+"):
+        log.error("FORCE-JOIN CONFIG ERROR: CHANNEL_ID must be @username or numeric -100...; got %r", required)
+        return False
+    try:
+        chat = await asyncio.wait_for(bot.get_chat(required), timeout=8.0)
+        me = await asyncio.wait_for(bot.get_chat_member(chat.id, bot.id), timeout=8.0)
+        status = str(getattr(me, "status", "")).lower()
+        can_manage = getattr(me, "can_manage_chat", None)
+        log.info(
+            "Force-join self-test: ref=%s chat_id=%s title=%s bot_status=%s can_manage_chat=%s",
+            required, chat.id, getattr(chat, "title", "") or "", status, can_manage
+        )
+        if status not in {"administrator", "creator"}:
+            log.error("FORCE-JOIN PERMISSION ERROR: bot must be Administrator in %s", required)
+            return False
+        return True
+    except Exception as exc:
+        log.error(
+            "FORCE-JOIN STARTUP CHECK FAILED ref=%s: %s (%s)",
+            required, exc, type(exc).__name__
         )
         return False
 
