@@ -391,6 +391,12 @@ def is_admin(update):
 async def start(update, context):
     user_id = update.effective_user.id
 
+    # Admin must always be able to access the bot even if Telegram's
+    # membership lookup is temporarily unavailable. Normal users still use
+    # the mandatory two-channel verification flow.
+    if is_admin(update) and not is_user_verified(user_id):
+        mark_user_verified(user_id)
+
     # Verified users never see the join gate again.
     if is_user_verified(user_id):
         await update.message.reply_text(
@@ -492,6 +498,17 @@ async def _button_handler_impl(update, context):
 
     if data == "check_join":
         user_id = query.from_user.id
+
+        # Admin bypass: never let a Telegram membership API hiccup block
+        # the bot owner from opening the main menu.
+        if is_admin(update):
+            mark_user_verified(user_id)
+            await query.edit_message_text(
+                "🔥 <b>Welcome to Zoner Offers AI!</b>\n\n👇 Choose an option:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_menu(user_id)
+            )
+            return
 
         # Lifetime verification fast-path.
         if is_user_verified(user_id):
