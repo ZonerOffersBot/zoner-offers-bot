@@ -28,6 +28,15 @@ ADMIN_IDS = {x.strip() for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip
 if ADMIN_ID:
     ADMIN_IDS.add(ADMIN_ID)
 CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
+# Telegram membership checks accept a numeric chat ID or @username, not a
+# t.me URL. Normalize common Render env-var formats once at startup.
+def _normalize_chat_ref(value):
+    value = (value or "").strip()
+    if value.startswith(("https://t.me/", "http://t.me/")):
+        value = "@" + value.rstrip("/").split("/")[-1].split("?")[0]
+    return value
+
+CHANNEL_ID = _normalize_chat_ref(CHANNEL_ID)
 # Required publication targets are enforced in code so a stale Render env var
 # cannot silently disable either channel.
 _REQUIRED_POST_CHANNELS = ["@zoneroffers", "@offerleloturant"]
@@ -276,55 +285,67 @@ def score_deal(title, discount, source):
     if source.lower() in {"amazon", "flipkart"}: score += 10
     return min(score, 100)
 
-_membership_cache = {}
-# Failed membership checks are never cached; users can join and retry immediately.
+# Negative membership results are never cached, so a user can join and
+# retry immediately. Successful verification is stored permanently in SQLite.
 MEMBERSHIP_CACHE_SECONDS = 0
 
+def required_channel_ref():
+    ref = _normalize_chat_ref(CHANNEL_ID)
+    return ref or "@zoneroffers"
+
+def required_channel_url():
+    ref = required_channel_ref()
+    return "https://t.me/" + ref[1:] if ref.startswith("@") else CHANNEL_URL
+
 async def membership_status(bot, user_id):
-    # Lifetime verification: once a user has passed the mandatory channel
-    # check, never ask Telegram to verify them again.
+    # Lifetime verification fast-path.
     if is_user_verified(user_id):
         return True
 
-    # Only the configured mandatory channel is required for verification.
-    # Publishing channels must NEVER become verification requirements.
-    required_channel = (CHANNEL_ID or "@zoneroffers").strip()
+    required_channel = required_channel_ref()
     try:
         member = await asyncio.wait_for(
-            bot.get_chat_member(required_channel, user_id), timeout=6.0
+            bot.get_chat_member(chat_id=required_channel, user_id=user_id),
+            timeout=8.0
         )
         status = str(getattr(member, "status", "")).lower()
+        is_member = getattr(member, "is_member", None)
         verified = status in {"member", "administrator", "creator"} or (
-            status == "restricted" and bool(getattr(member, "is_member", False))
+            status == "restricted" and is_member is True
         )
         if verified:
             mark_user_verified(user_id)
+            log.info("Force-join verified user=%s channel=%s status=%s",
+                     user_id, required_channel, status)
         else:
-            log.warning("Verification rejected: channel=%s status=%s user=%s",
-                        required_channel, status, user_id)
+            log.info("Force-join rejected user=%s channel=%s status=%s is_member=%s",
+                     user_id, required_channel, status, is_member)
         return verified
     except Exception as exc:
-        log.warning("Mandatory-channel membership check failed for %s user=%s: %s",
+        # Never bypass verification when Telegram cannot answer.
+        log.warning("Force-join API check failed channel=%s user=%s: %s",
                     required_channel, user_id, exc)
         return False
+
 def join_gate_markup():
-    channel_url = CHANNEL_URL
-    if CHANNEL_ID and str(CHANNEL_ID).startswith("@"):
-        channel_url = "https://t.me/" + str(CHANNEL_ID)[1:]
-    rows = [[InlineKeyboardButton("📢 Join Required Channel", url=channel_url)]]
-    if GROUP_ID and GROUP_URL:
-        rows.append([InlineKeyboardButton("👥 Join Group", url=GROUP_URL)])
-    rows.append([InlineKeyboardButton("📢 Join Second Channel (Optional)", url=SECOND_CHANNEL_URL)])
-    rows.append([InlineKeyboardButton("✅ I Joined — Check Again", callback_data="check_join")])
+    rows = [[InlineKeyboardButton(
+        "📢 Join Required Channel", url=required_channel_url()
+    )]]
+    if SECOND_CHANNEL_URL:
+        rows.append([InlineKeyboardButton(
+            "📢 Second Channel (Optional)", url=SECOND_CHANNEL_URL
+        )])
+    rows.append([InlineKeyboardButton(
+        "✅ I Joined — Check Again", callback_data="check_join"
+    )])
     return InlineKeyboardMarkup(rows)
 
 def join_gate_text():
     return (
         "🔐 <b>Join Required</b>\n\n"
-        "Zoner Offers AI use karne se pehle hamare <b>required channel</b>"
-        + (" <b>aur group</b>" if GROUP_ID and GROUP_URL else "")
-        + " ko join karein.\n\n"
-        "Required membership complete hone ke baad <b>✅ I Joined — Check Again</b> dabayein."
+        "Zoner Offers AI use karne se pehle hamare <b>required channel</b> ko join karein.\n\n"
+        "Join karne ke baad <b>✅ I Joined — Check Again</b> dabayein.\n"
+        "Verification successful hone ke baad aapko dobara join gate nahi dikhega."
     )
 
 def get_setting_sync(key, default=None):
@@ -599,9 +620,14 @@ async def _button_handler_impl(update, context):
 
     # Once verified, this Telegram account is allowed through without another join gate.
     if not is_user_verified(query.from_user.id):
+        # Every unverified callback uses the same force-join gate.
         verified = await membership_status(context.bot, query.from_user.id)
         if not verified:
-            await query.edit_message_text(join_gate_text(), parse_mode=ParseMode.HTML, reply_markup=join_gate_markup())
+            await query.edit_message_text(
+                join_gate_text(),
+                parse_mode=ParseMode.HTML,
+                reply_markup=join_gate_markup()
+            )
             return
         mark_user_verified(query.from_user.id)
 
