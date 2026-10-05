@@ -473,10 +473,10 @@ async def scan_and_publish(bot, manual=False):
     added = 0; skipped = 0
     seen = set()
     for raw in candidates:
-        if not is_deal_candidate(*raw):
+        if not is_deal_candidate(raw[0], raw[1], raw[2]):
             skipped += 1
             continue
-        c = normalize_candidate(*raw)
+        c = normalize_candidate(raw[0], raw[1], raw[2])
         key = fingerprint(c["title"], c["url"])
         if key in seen: skipped += 1; continue
         seen.add(key)
