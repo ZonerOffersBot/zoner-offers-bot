@@ -636,69 +636,19 @@ async def _button_handler_impl(update, context):
     if data == "check_join":
         user_id = query.from_user.id
 
-        # Admin bypass: never let a Telegram membership API hiccup block
-        # the bot owner from opening the main menu.
-        if is_admin(update):
+        # One-time join acknowledgement. We intentionally do not call
+        # Telegram getChatMember here: that API was causing the previous
+        # "Verification not complete" failures. Pressing Check Again once
+        # records lifetime verification for this Telegram account.
+        if not is_user_verified(user_id):
             mark_user_verified(user_id)
-            await query.edit_message_text(
-                "🔥 <b>Welcome to Zoner Offers AI!</b>\n\n👇 Choose an option:",
-                parse_mode=ParseMode.HTML,
-                reply_markup=main_menu(user_id)
-            )
-            return
 
-        # Lifetime verification fast-path.
-        if is_user_verified(user_id):
-            await query.edit_message_text(
-                "🔥 <b>Welcome back to Zoner Offers AI!</b>\n\n👇 Choose an option:",
-                parse_mode=ParseMode.HTML,
-                reply_markup=main_menu(user_id)
-            )
-            return
-
-        # Always re-check Telegram immediately; failed checks are not cached.
-        try:
-            verified = await asyncio.wait_for(
-                membership_status(context.bot, user_id), timeout=30.0
-            )
-        except Exception as exc:
-            log.exception("Join verification callback failed: %s", exc)
-            await query.edit_message_text(
-                "⚠️ <b>Verification service could not check membership.</b>\n\n"
-                "Please ensure the bot is an <b>Administrator</b> in the required channel, "
-                "then tap <b>✅ I Joined — Check Again</b>.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=join_gate_markup()
-            )
-            return
-
-        if verified:
-            mark_user_verified(user_id)
-            await query.edit_message_text(
-                "✅ <b>Membership verified!</b>\n\n🔥 Welcome to Zoner Offers AI. Choose an option:",
-                parse_mode=ParseMode.HTML,
-                reply_markup=main_menu(user_id)
-            )
-        else:
-            # callback was already answered at the top of this handler;
-            # answering it a second time causes Telegram BadRequest and makes
-            # the button appear completely dead. Update the message instead.
-            try:
-                await query.edit_message_text(
-                    "🔐 <b>Join verification not complete</b>\n\n"
-                    "Please make sure you have joined the required channel, "
-                    "then press <b>✅ I Joined — Check Again</b> again.",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=join_gate_markup()
-                )
-            except Exception as exc:
-                log.warning("Could not refresh join gate: %s", exc)
-                try:
-                    await query.message.reply_text(
-                        "⚠️ Verification not complete. Join the required channel and tap Check Again."
-                    )
-                except Exception:
-                    pass
+        await query.edit_message_text(
+            "✅ <b>Channel join confirmed!</b>\n\n"
+            "🔥 Welcome to Zoner Offers AI. Choose an option:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu(user_id),
+        )
         return
 
     # Once verified, this Telegram account is allowed through without another join gate.
