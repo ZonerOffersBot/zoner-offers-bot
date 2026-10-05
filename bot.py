@@ -1,5 +1,8 @@
 import os
 import logging
+from threading import Thread
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -16,24 +19,82 @@ logging.basicConfig(
 )
 
 
+# =========================
+# RENDER HEALTH SERVER
+# =========================
+
+class HealthHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Zoner Offers Bot is running!")
+
+    def log_message(self, format, *args):
+        return
+
+
+def run_health_server():
+    port = int(os.getenv("PORT", "10000"))
+
+    server = HTTPServer(
+        ("0.0.0.0", port),
+        HealthHandler
+    )
+
+    print(f"🌐 Health server running on port {port}")
+
+    server.serve_forever()
+
+
+# =========================
+# MAIN MENU
+# =========================
+
 def main_menu():
+
     keyboard = [
         [
-            InlineKeyboardButton("🛍️ Latest Offers", callback_data="offers"),
-            InlineKeyboardButton("🏷️ Categories", callback_data="categories"),
+            InlineKeyboardButton(
+                "🛍️ Latest Offers",
+                callback_data="offers"
+            ),
+            InlineKeyboardButton(
+                "🏷️ Categories",
+                callback_data="categories"
+            ),
         ],
         [
-            InlineKeyboardButton("🔔 Notifications", callback_data="subscribe"),
-            InlineKeyboardButton("📢 Join Channel", url="https://t.me/ZonerOffers"),
+            InlineKeyboardButton(
+                "🔔 Notifications",
+                callback_data="subscribe"
+            ),
+            InlineKeyboardButton(
+                "📢 Join Channel",
+                url="https://t.me/ZonerOffers"
+            ),
         ],
         [
-            InlineKeyboardButton("🆘 Help", callback_data="help"),
+            InlineKeyboardButton(
+                "🆘 Help",
+                callback_data="help"
+            ),
         ],
     ]
+
     return InlineKeyboardMarkup(keyboard)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================
+# START COMMAND
+# =========================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     text = (
         "🔥 *Welcome to Zoner Offers!*\n\n"
         "Discover the latest deals, discounts and price drops.\n\n"
@@ -47,11 +108,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================
+# BUTTON HANDLER
+# =========================
+
+async def button_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     query = update.callback_query
+
     await query.answer()
 
     if query.data == "offers":
+
         await query.edit_message_text(
             "🛍️ *Latest Offers*\n\n"
             "No offers have been added yet.\n\n"
@@ -60,22 +131,55 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "categories":
+
         keyboard = [
-            [InlineKeyboardButton("📱 Electronics", callback_data="cat_electronics")],
-            [InlineKeyboardButton("🎮 Gaming", callback_data="cat_gaming")],
-            [InlineKeyboardButton("👕 Fashion", callback_data="cat_fashion")],
-            [InlineKeyboardButton("🏠 Home & Kitchen", callback_data="cat_home")],
-            [InlineKeyboardButton("📚 Books", callback_data="cat_books")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="back")],
+            [
+                InlineKeyboardButton(
+                    "📱 Electronics",
+                    callback_data="cat_electronics"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎮 Gaming",
+                    callback_data="cat_gaming"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "👕 Fashion",
+                    callback_data="cat_fashion"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🏠 Home & Kitchen",
+                    callback_data="cat_home"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📚 Books",
+                    callback_data="cat_books"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ Back",
+                    callback_data="back"
+                ),
+            ],
         ]
 
         await query.edit_message_text(
-            "🏷️ *Offer Categories*\n\nChoose a category:",
+            "🏷️ *Offer Categories*\n\n"
+            "Choose a category:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
     elif query.data == "subscribe":
+
         await query.edit_message_text(
             "🔔 *Notifications*\n\n"
             "Notification system will be available soon.",
@@ -83,6 +187,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "help":
+
         await query.edit_message_text(
             "🆘 *Zoner Offers Help*\n\n"
             "Use the buttons to browse offers and categories.\n\n"
@@ -91,20 +196,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "back":
+
         await query.edit_message_text(
-            "🔥 *Zoner Offers*\n\nChoose an option:",
+            "🔥 *Zoner Offers*\n\n"
+            "Choose an option:",
             parse_mode="Markdown",
             reply_markup=main_menu(),
         )
 
     else:
+
         await query.edit_message_text(
             "📌 This category is currently empty.",
             parse_mode="Markdown",
         )
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================
+# HELP COMMAND
+# =========================
+
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     await update.message.reply_text(
         "🆘 *Zoner Offers Help*\n\n"
         "Use /start to open the main menu.",
@@ -112,17 +228,50 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# =========================
+# START BOT
+# =========================
+
 def run_bot():
+
     if not TOKEN:
-        raise RuntimeError("BOT_TOKEN environment variable is missing.")
+        raise RuntimeError(
+            "BOT_TOKEN environment variable is missing."
+        )
 
-    application = Application.builder().token(TOKEN).build()
+    # Start Render health server
+    health_thread = Thread(
+        target=run_health_server,
+        daemon=True
+    )
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CallbackQueryHandler(button_handler))
+    health_thread.start()
+
+    # Create Telegram application
+    application = (
+        Application
+        .builder()
+        .token(TOKEN)
+        .build()
+    )
+
+    # Commands
+    application.add_handler(
+        CommandHandler("start", start)
+    )
+
+    application.add_handler(
+        CommandHandler("help", help_command)
+    )
+
+    # Buttons
+    application.add_handler(
+        CallbackQueryHandler(button_handler)
+    )
 
     print("🔥 Zoner Offers Bot is running...")
+
+    # Start Telegram polling
     application.run_polling()
 
 
