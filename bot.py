@@ -132,6 +132,15 @@ def init_db():
         user_id INTEGER PRIMARY KEY,
         enabled INTEGER NOT NULL DEFAULT 1
     )""")
+    # Publish history lets the scheduler safely reuse cached/older deal data
+    # after the allowed 2-hour freshness window without doing live scraping.
+    con.execute("""CREATE TABLE IF NOT EXISTS publish_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        offer_id INTEGER NOT NULL,
+        published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
+    con.execute("""CREATE INDEX IF NOT EXISTS idx_publish_history_offer_time
+                   ON publish_history(offer_id, published_at)""")
     con.execute("""CREATE TABLE IF NOT EXISTS verified_users (
         user_id INTEGER PRIMARY KEY,
         verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -825,6 +834,8 @@ async def cancel(update, context):
     return ConversationHandler.END
 
 def insert_offer(title, price, old_price, category, url, source, discount, score):
+    # Category is mandatory for every stored/published link.
+    category = category or guess_category(f"{title} {source} {url}") or "electronics"
     fp = fingerprint(title, url)
     con = db()
     try:
@@ -836,6 +847,42 @@ def insert_offer(title, price, old_price, category, url, source, discount, score
         return None
     finally:
         con.close()
+
+def get_offer_by_fingerprint(fp):
+    con = db()
+    row = con.execute("SELECT * FROM offers WHERE fingerprint=?", (fp,)).fetchone()
+    con.close()
+    return row
+
+def mark_published(offer_id):
+    con = db()
+    con.execute("INSERT INTO publish_history(offer_id, published_at) VALUES (?, CURRENT_TIMESTAMP)", (offer_id,))
+    con.commit()
+    con.close()
+
+def get_cached_offer_for_publish():
+    # Never scrape at publish time. Prefer offers not published in the last
+    # 2 hours; if the cache is exhausted, reuse the oldest cached offer so
+    # automatic publishing never stops.
+    con = db()
+    row = con.execute("""
+        SELECT o.*
+        FROM offers o
+        LEFT JOIN (
+            SELECT offer_id, MAX(published_at) AS last_published
+            FROM publish_history GROUP BY offer_id
+        ) h ON h.offer_id = o.id
+        WHERE h.last_published IS NULL
+           OR datetime(h.last_published) <= datetime('now', '-2 hours')
+        ORDER BY CASE WHEN h.last_published IS NULL THEN 0 ELSE 1 END,
+                 datetime(COALESCE(h.last_published, o.created_at)) ASC,
+                 o.id ASC
+        LIMIT 1
+    """).fetchone()
+    if row is None:
+        row = con.execute("SELECT * FROM offers ORDER BY id ASC LIMIT 1").fetchone()
+    con.close()
+    return row
 
 def fetch_feed(source, query):
     url = "https://news.google.com/rss/search?q=" + quote_plus(query) + "&hl=en-IN&gl=IN&ceid=IN:en"
@@ -975,13 +1022,14 @@ def normalize_candidate(source, title, url):
     }
 
 async def publish_offer(bot, row):
-    """Publish the same deal to every configured channel and subscribers."""
+    """Publish a cached deal to every configured channel and subscribers."""
     text = "🤖 <b>AI Deal Alert</b>\n\n" + offer_text(row)
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy / View Deal", url=row["url"])]])
-    channel_results = []
+    channel_published = False
 
     if AUTO_POST:
-        # Every discovered/fallback link is posted to ALL configured channels.
+        # Publishing is the first priority. One channel failure never stops
+        # the next channel or the scheduler.
         for channel in POST_CHANNELS:
             posted = False
             for attempt in range(3):
@@ -992,7 +1040,7 @@ async def publish_offer(bot, row):
                         read_timeout=8, write_timeout=8
                     )
                     log.info("✅ Published deal %s to channel %s", row["id"], channel)
-                    channel_results.append((channel, True))
+                    channel_published = True
                     posted = True
                     break
                 except Exception as exc:
@@ -1003,9 +1051,9 @@ async def publish_offer(bot, row):
                     if attempt < 2:
                         await asyncio.sleep(1)
             if not posted:
-                channel_results.append((channel, False))
                 log.error("❌ Could not publish deal %s to %s", row["id"], channel)
 
+    # Subscriber notifications are best-effort and can never block publishing.
     con = db()
     users = con.execute("SELECT user_id FROM subscribers WHERE enabled=1").fetchall()
     con.close()
@@ -1017,135 +1065,72 @@ async def publish_offer(bot, row):
                 read_timeout=8, write_timeout=8
             )
         except Exception as exc:
-            log.debug("Notify failed %s: %s", user["user_id"], exc)
+            logasync def scan_and_publish(bot, manual=False):
+    """Publish one cached/cached-old deal every cycle without live scraping.
 
-async def scan_and_publish(bot, manual=False):
-    """Run one discovery cycle and publish one fresh deal link.
-    Discovery failures must never block the guaranteed shopping fallback.
+    Data may be up to 2 hours old (or older when the cache is exhausted).
+    The publisher never waits for live discovery and never stops merely because
+    fresh data is unavailable. Every published link is stored with a category.
     """
-    try:
-        candidates = await asyncio.wait_for(
-            asyncio.to_thread(discover_candidates), timeout=45
-        )
-    except Exception as exc:
-        log.exception("Discovery unavailable; switching immediately to fallback: %s", exc)
-        candidates = []
-    added = 0; skipped = 0
-    seen = set()
-    normalized = []
+    added = 0
+    skipped = 0
 
-    for raw in candidates:
-        if not is_deal_candidate(raw[0], raw[1], raw[2]):
-            skipped += 1
-            continue
-        c = normalize_candidate(raw[0], raw[1], raw[2])
-        key = fingerprint(c["title"], c["url"])
-        if key in seen:
-            skipped += 1
-            continue
-        seen.add(key)
-        normalized.append(c)
+    # First use an existing cached offer. It already contains the category,
+    # price fields and URL, so no live request is required.
+    row = get_cached_offer_for_publish()
 
-    # Highest quality first so the channel gets one useful link per cycle.
-    normalized.sort(key=lambda x: x["score"], reverse=True)
-
-    # Never let an already-stored fingerprint stop the publisher. Discovery
-    # feeds often repeat the same deal for several cycles; skip stored
-    # fingerprints here and keep looking for a fresh candidate.
-    con = db()
-    existing_fingerprints = {
-        row["fingerprint"]
-        for row in con.execute(
-            "SELECT fingerprint FROM offers WHERE fingerprint IS NOT NULL"
-        ).fetchall()
-    }
-    con.close()
-
-    fresh = [
-        x for x in normalized
-        if fingerprint(x["title"], x["url"]) not in existing_fingerprints
-    ]
-    selected = next((x for x in fresh if x["score"] >= MIN_DEAL_SCORE), None)
-
-    # If no strong fresh candidate exists, publish the best fresh candidate.
-    # This keeps the link publisher moving without changing its configured
-    # schedule or touching the Telegram UI handlers.
-    if selected is None and fresh:
-        selected = fresh[0]
-
-    fallback_used = False
-    if selected is None:
-        # Pick a fallback that has never been stored. Never republish an
-        # existing fallback just to keep the scheduler busy.
+    # If the cache has no data yet, seed it from the built-in shopping links.
+    # These are static fallback links, not live scraped data.
+    if row is None:
         fallback_pool = list(FALLBACK_PRODUCTS)
         offset = datetime.now(timezone.utc).minute % len(fallback_pool)
         fallback_pool = fallback_pool[offset:] + fallback_pool[:offset]
         for source, title, url in fallback_pool:
             candidate = normalize_candidate(source, title + " Deal", url)
-            if fingerprint(candidate["title"], candidate["url"]) not in existing_fingerprints:
-                selected = candidate
-                selected["score"] = 50
-                fallback_used = True
-                log.info("Using unique fallback shopping link for %s", source)
-                break
-
-    if selected:
-        # Validate the actual destination before saving/publishing. Broken,
-        # blocked, malformed, or non-HTTP destinations are skipped and the
-        # scanner can try another candidate instead.
-        async def url_ok(url):
-            try:
-                parsed = urlparse(url)
-                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                    return False
-                def probe():
-                    try:
-                        resp = requests.head(url, allow_redirects=True, timeout=5,
-                                             headers={"User-Agent": "Mozilla/5.0"})
-                        if resp.status_code < 400:
-                            return True
-                        if resp.status_code in {405, 403}:
-                            resp = requests.get(url, allow_redirects=True, timeout=5,
-                                                stream=True,
-                                                headers={"User-Agent": "Mozilla/5.0"})
-                            return resp.status_code < 400
-                        return False
-                    except requests.RequestException:
-                        return False
-                return await asyncio.to_thread(probe)
-            except Exception:
-                return False
-
-        if not await url_ok(selected["url"]):
-            log.warning("Skipping broken/unreachable deal URL: %s", selected["url"])
-            # Try the next fresh candidate, then fallbacks.
-            alternatives = [x for x in fresh if x["url"] != selected["url"]]
-            selected = None
-            for candidate in alternatives:
-                if await url_ok(candidate["url"]):
-                    selected = candidate
-                    fallback_used = False
-                    break
-
-        if selected:
             oid = insert_offer(
-                selected["title"], selected["price"], selected["old_price"],
-                selected["category"], selected["url"], selected["source"],
-                selected["discount"], selected["score"]
+                candidate["title"], candidate["price"], candidate["old_price"],
+                candidate["category"], candidate["url"], candidate["source"],
+                candidate["discount"], candidate["score"]
             )
             if oid:
                 row = get_offer(oid)
-                if row:
-                    await publish_offer(bot, row)
-                    added = 1
-                else:
-                    skipped += 1
-            else:
-                # Fingerprint uniqueness is the final duplicate guard. Never
-                # republish an existing row merely because discovery repeated it.
-                skipped += 1
+                break
+        if row is None:
+            log.error("No cached/fallback offer available for publishing")
+            return "Added: 0\\nFiltered/duplicate: 0\\nCandidates checked: 0"
 
-    return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: {len(candidates)}"
+    # Repair category metadata before any publication. This makes category
+    # storage compulsory even for legacy rows created before this fix.
+    category = row["category"] or guess_category(
+        f"{row['title']} {row['source']} {row['url']}"
+    ) or "electronics"
+    if row["category"] != category:
+        con = db()
+        con.execute("UPDATE offers SET category=? WHERE id=?", (category, row["id"]))
+        con.commit()
+        con.close()
+        row = get_offer(row["id"])
+
+    try:
+        published = await publish_offer(bot, row)
+    except Exception:
+        log.exception("Publishing cycle failed; scheduler will continue")
+        published = False
+
+    if published:
+        mark_published(row["id"])
+        added = 1
+        log.info(
+            "✅ Published cached deal id=%s category=%s; next reuse allowed after 2 hours",
+            row["id"], category
+        )
+    else:
+        skipped = 1
+        log.warning("No configured channel accepted deal id=%s; keeping scheduler alive", row["id"])
+
+    return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: 1"
+
+: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: {len(candidates)}"
 
 async def auto_scan_loop(app):
     """Single production publishing loop with admin-configurable interval.
