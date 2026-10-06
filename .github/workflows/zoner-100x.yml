@@ -1,0 +1,87 @@
+name: Zoner 100x Runtime Verification
+
+on:
+  push:
+    branches:
+      - "qa-100x-runtime-*"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Compile every Python file
+        run: python -m compileall -q .
+      - name: Import production modules 100 times
+        env:
+          DB_FILE: /tmp/zoner_import_test.db
+        run: |
+          for i in $(seq 1 100); do
+            rm -f /tmp/zoner_import_test.db
+            python -c "import bot, runner, main; bot.init_db(); print('IMPORT PASS $i')"
+          done
+      - name: Functional smoke suite 100 iterations
+        env:
+          DB_FILE: /tmp/zoner_functional_test.db
+        run: |
+          rm -f /tmp/zoner_functional_test.db
+          python - <<'PY'
+          import asyncio, os
+          os.environ["DB_FILE"] = "/tmp/zoner_functional_test.db"
+          import bot
+          bot.init_db()
+          assert bot.required_channel_ref() == "@zoneroffers"
+          assert bot.extract_price("Now ₹1,299") == "1299"
+          assert bot.extract_discount("70% off") == 70
+          assert bot.guess_category("PS5 gaming controller") == "gaming"
+          assert bot.guess_category("men sneakers Myntra") == "fashion"
+          assert bot.score_deal("Limited deal", 70, "Amazon") >= 90
+
+          class FakeBot:
+              def __init__(self):
+                  self.sent = []
+                  self.id = 999
+              async def send_photo(self, **kwargs):
+                  self.sent.append(("photo", kwargs["chat_id"]))
+              async def send_message(self, **kwargs):
+                  self.sent.append(("message", kwargs["chat_id"]))
+
+          async def run():
+              for i in range(100):
+                  oid = bot.insert_offer(
+                      f"QA Product {i}", "1299", "1999", "electronics",
+                      f"https://example.com/product/{i}", "QA", 35, 70,
+                      image_url="https://example.com/product.jpg",
+                      description="QA test product")
+                  assert oid is not None
+                  row = bot.get_offer(oid)
+                  assert row is not None
+                  fake = FakeBot()
+                  original = bot.ensure_offer_image
+                  bot.ensure_offer_image = lambda r: ("https://example.com/product.jpg", r)
+                  try:
+                      published = await bot.publish_offer(fake, row)
+                  finally:
+                      bot.ensure_offer_image = original
+                  assert published is True, f"publish failed iteration {i}"
+                  bot.mark_published(oid)
+                  rows = bot.get_offers(category="electronics", limit=1000)
+                  assert any(r["id"] == oid for r in rows)
+                  assert fake.sent, f"no Telegram send attempted iteration {i}"
+                  uid = 100000 + i
+                  assert bot.subscriber_enabled(uid) is True
+                  bot.save_subscriber(uid, False)
+                  assert bot.subscriber_enabled(uid) is False
+                  bot.mark_user_verified(uid)
+                  assert bot.is_user_verified(uid) is True
+                  bot.mark_user_verified(uid)
+                  assert bot.is_user_verified(uid) is True
+          asyncio.run(run())
+          print("100/100 functional iterations PASS")
+          PY
