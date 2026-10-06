@@ -1276,6 +1276,35 @@ async def scan_and_publish(bot, manual=False):
     added = 0
     skipped = 0
 
+    # PUBLISH FIRST: never make auto-publishing wait for network discovery.
+    # A cached offer is enough to keep the channel alive immediately.
+    row = get_cached_offer_for_publish()
+
+    if row is not None:
+        category = row["category"] or guess_category(
+            f"{row['title']} {row['source']} {row['url']}"
+        ) or "electronics"
+        if row["category"] != category:
+            con = db()
+            con.execute("UPDATE offers SET category=? WHERE id=?", (category, row["id"]))
+            con.commit()
+            con.close()
+            row = get_offer(row["id"])
+
+        try:
+            published = await publish_offer(bot, row)
+        except Exception:
+            log.exception("Publishing cycle failed; scheduler will continue")
+            published = False
+
+        if published:
+            mark_published(row["id"])
+            log.info("🚀 Published cached deal id=%s category=%s; discovery runs after publish",
+                     row["id"], category)
+        else:
+            log.warning("No configured channel accepted cached deal id=%s; scheduler continues",
+                        row["id"])
+
     # Discover NEW product/deal links at most once per 2 hours. Discovery is
     # separate from publishing: image + product URL are cached before a post,
     # so the publishing step itself never waits for live scraping.
@@ -1326,66 +1355,39 @@ async def scan_and_publish(bot, manual=False):
         except Exception:
             log.exception("New product discovery failed; cached publishing will continue")
 
-    # Prefer an unpublished/newly discovered cached offer first. If no fresh
-    # candidate is available, reuse the oldest cached offer after the 2-hour
-    # cooldown so automatic publishing never stops.
-    row = get_cached_offer_for_publish()
-
-    # If the cache has no data yet, seed it from the built-in shopping links.
-    # These fallback pages are only eligible after a real retailer image is
-    # fetched; no AI/cartoon image is ever generated.
+    # If cache was empty, seed a fallback after discovery and publish it now.
     if row is None:
-        fallback_pool = list(FALLBACK_PRODUCTS)
-        offset = datetime.now(timezone.utc).minute % len(fallback_pool)
-        fallback_pool = fallback_pool[offset:] + fallback_pool[:offset]
-        for source, title, url in fallback_pool:
-            candidate = normalize_candidate(source, title + " Deal", url)
-            oid = insert_offer(
-                candidate["title"], candidate["price"], candidate["old_price"],
-                candidate["category"], candidate["url"], candidate["source"],
-                candidate["discount"], candidate["score"],
-                image_url="",
-                description=generate_product_description(
-                    candidate["title"], candidate["category"]
-                )
-            )
-            if oid:
-                row = get_offer(oid)
-                break
+        row = get_cached_offer_for_publish()
         if row is None:
+            fallback_pool = list(FALLBACK_PRODUCTS)
+            offset = datetime.now(timezone.utc).minute % len(fallback_pool)
+            fallback_pool = fallback_pool[offset:] + fallback_pool[:offset]
+            for source, title, url in fallback_pool:
+                candidate = normalize_candidate(source, title + " Deal", url)
+                oid = insert_offer(
+                    candidate["title"], candidate["price"], candidate["old_price"],
+                    candidate["category"], candidate["url"], candidate["source"],
+                    candidate["discount"], candidate["score"],
+                    image_url="",
+                    description=generate_product_description(candidate["title"], candidate["category"])
+                )
+                if oid:
+                    row = get_offer(oid)
+                    break
+        if row is not None:
+            try:
+                published = await publish_offer(bot, row)
+            except Exception:
+                log.exception("Publishing cycle failed for newly cached offer")
+                published = False
+            if published:
+                mark_published(row["id"])
+                log.info("🚀 Published newly cached deal id=%s", row["id"])
+        else:
             log.error("No cached/fallback offer available for publishing")
-            return "Added: 0\\nFiltered/duplicate: 0\\nCandidates checked: 0"
+            return "Added: 0\nFiltered/duplicate: 0\nCandidates checked: 0"
 
-    # Repair category metadata before any publication. This makes category
-    # storage compulsory even for legacy rows created before this fix.
-    category = row["category"] or guess_category(
-        f"{row['title']} {row['source']} {row['url']}"
-    ) or "electronics"
-    if row["category"] != category:
-        con = db()
-        con.execute("UPDATE offers SET category=? WHERE id=?", (category, row["id"]))
-        con.commit()
-        con.close()
-        row = get_offer(row["id"])
-
-    try:
-        published = await publish_offer(bot, row)
-    except Exception:
-        log.exception("Publishing cycle failed; scheduler will continue")
-        published = False
-
-    if published:
-        mark_published(row["id"])
-        added = 1
-        log.info(
-            "✅ Published cached deal id=%s category=%s; next reuse allowed after 2 hours",
-            row["id"], category
-        )
-    else:
-        skipped = 1
-        log.warning("No configured channel accepted deal id=%s; keeping scheduler alive", row["id"])
-
-    return f"Added: {added}\\nFiltered/duplicate: {skipped}\\nCandidates checked: 1"
+    return "Auto-publisher cycle complete"
 
 
 async def auto_scan_loop(app):
