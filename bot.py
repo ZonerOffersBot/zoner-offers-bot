@@ -1010,8 +1010,8 @@ async def _button_handler_impl(update, context):
             await query.edit_message_text(
                 "⏰ <b>Post Interval</b>\n\n"
                 f"Current: <b>{html.escape(str(interval))} seconds</b>\n"
-                "Default: <b>1800 seconds (30 minutes)</b>\n\n"
-                "Change with: <code>/setinterval 1800</code>",
+                "Production interval: <b>900 seconds (15 minutes)</b>\n\n"
+                "Auto publishing is fixed at 15 minutes.",
                 parse_mode=ParseMode.HTML, reply_markup=admin_menu())
             return
         if data == "admin_broadcast":
