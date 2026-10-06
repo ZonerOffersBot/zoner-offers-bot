@@ -238,7 +238,11 @@ def get_offers(category=None, price_max=None, price_min=None, limit=20):
     """Return only published offers, ordered by latest publication and filterable
     by the saved category and numeric price."""
     con = db()
-    conditions = ["CAST(REPLACE(o.price, ',', '') AS REAL) > 0"]
+    # Latest Deals must show every successfully published offer, even when
+    # the retailer did not expose a numeric price and the saved value is
+    # "Check live price". Numeric filtering is applied only when a price
+    # range is explicitly requested.
+    conditions = []
     params = []
     if category:
         conditions.append("o.category=?")
