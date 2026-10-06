@@ -668,7 +668,7 @@ def admin_menu():
         [InlineKeyboardButton("⏰ Post Interval", callback_data="admin_interval"),
          InlineKeyboardButton("📝 Broadcast", callback_data="admin_broadcast")],
         [InlineKeyboardButton("🛒 Add Product", callback_data="admin_addproduct"),
-         InlineKeyboardButton("🔁 Re-publish Offer", callback_data="admin_republish")],
+         InlineKeyboardButton("🟣 Re-publish Vault", callback_data="admin_republish")],
         [InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
          InlineKeyboardButton("🤖 Scan Now", callback_data="admin_scan")],
