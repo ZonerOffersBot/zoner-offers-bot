@@ -58,7 +58,7 @@ DB_FILE = os.getenv("DB_FILE", "/var/data/zoner_offers.db" if os.path.isdir("/va
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/zoneroffers").strip() or "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
 try:
-    SCAN_SECONDS = max(30, min(int(os.getenv("SCAN_SECONDS", "60")), 86400))
+    SCAN_SECONDS = max(30, min(int(os.getenv("SCAN_SECONDS", "900")), 86400))
 except (TypeError, ValueError):
     SCAN_SECONDS = 120
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
@@ -1410,7 +1410,7 @@ async def auto_scan_loop(app):
             # Keep autonomous publishing responsive. Admin interval settings
             # remain supported, but a stale/accidental huge value cannot make
             # the publisher appear dead for hours.
-            interval = max(30, min(interval, 120))
+            interval = max(30, min(interval, 86400))
         except (TypeError, ValueError):
             interval = SCAN_SECONDS
 
