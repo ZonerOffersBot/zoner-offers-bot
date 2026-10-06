@@ -32,7 +32,7 @@ bot.main_menu = _patched_main_menu
 
 async def _published_links(update, context):
     query = update.callback_query
-    rows = bot.get_offers(limit=30)
+    rows = bot.get_offers(limit=100)
     if not rows:
         await query.edit_message_text(
             "📚 <b>Published Links</b>\n\nNo successfully published links are stored yet.",
@@ -46,7 +46,7 @@ async def _published_links(update, context):
         buttons.append([InlineKeyboardButton(f"🔗 {title}", callback_data=f"offer_{row['id']}")])
     buttons.append([InlineKeyboardButton("⬅️ Main Menu", callback_data="back")])
     await query.edit_message_text(
-        "📚 <b>Published Links</b>\n\nEvery item below has a successful publication record and is saved in the bot database.",
+        "📚 <b>Published Links</b>\n\nEvery successfully published link is saved permanently in the database and remains available here and under its saved category.",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
