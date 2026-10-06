@@ -641,7 +641,7 @@ def offer_markup(row, back="offers"):
     ])
 
 def admin_menu():
-    group_state = "ON" if str(get_setting_sync("auto_group_publish", "0")) == "1" else "OFF"
+    group_state = "ON" if str(get_setting_sync("auto_group_publish", "1")) == "1" else "OFF"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"📢 Auto Group Publish: {group_state}", callback_data="admin_group_publish")],
         [InlineKeyboardButton("📢 Force Join Channels", callback_data="admin_force"),
