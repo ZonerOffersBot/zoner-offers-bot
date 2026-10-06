@@ -3,6 +3,7 @@ import logging
 from threading import Thread
 
 import bot
+import source_copy
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -36,6 +37,10 @@ async def managed_post_init(app):
 
     task = asyncio.create_task(bot.auto_scan_loop(app), name="zoner-auto-scan")
     app.bot_data["auto_scan_task"] = task
+    # Public source copier is isolated from the deal publisher. A copier
+    # failure must never stop the 15-minute auto-publisher.
+    source_task = asyncio.create_task(source_copy.source_copy_loop(app), name="zoner-source-copy")
+    app.bot_data["source_copy_task"] = source_task
     # Force-join diagnostics are informational only. They must never prevent
     # the autonomous publisher from starting if a channel is temporarily unavailable.
     try:
@@ -46,6 +51,13 @@ async def managed_post_init(app):
 
 
 async def managed_post_stop(app):
+    source_task = app.bot_data.pop("source_copy_task", None)
+    if source_task and not source_task.done():
+        source_task.cancel()
+        try:
+            await source_task
+        except asyncio.CancelledError:
+            pass
     task = app.bot_data.pop("auto_scan_task", None)
     if task and not task.done():
         log.info("🛑 Stopping autonomous deal scanner...")
