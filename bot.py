@@ -7,6 +7,7 @@ import sqlite3
 import logging
 import asyncio
 import hashlib
+import time
 from datetime import datetime, timezone
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -165,6 +166,18 @@ def init_db():
     )""")
     con.execute("""CREATE INDEX IF NOT EXISTS idx_publish_history_offer_time
                    ON publish_history(offer_id, published_at)""")
+    # Durable publication ledger: a link is recorded immediately after a
+    # successful Telegram send, instead of waiting for the whole publish cycle.
+    con.execute("""CREATE TABLE IF NOT EXISTS published_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        offer_id INTEGER NOT NULL,
+        chat_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        category TEXT NOT NULL,
+        published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
+    con.execute("""CREATE INDEX IF NOT EXISTS idx_published_links_offer_time
+                   ON published_links(offer_id, published_at)""")
     con.execute("""CREATE TABLE IF NOT EXISTS verified_users (
         user_id INTEGER PRIMARY KEY,
         verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1134,10 +1147,41 @@ def get_offer_by_fingerprint(fp):
     return row
 
 def mark_published(offer_id):
-    con = db()
-    con.execute("INSERT INTO publish_history(offer_id, published_at) VALUES (?, CURRENT_TIMESTAMP)", (offer_id,))
-    con.commit()
-    con.close()
+    """Legacy compatibility wrapper; records a publication in the same ledger."""
+    row = get_offer(offer_id)
+    if row is None:
+        return False
+    return record_publication(offer_id, "legacy", row["url"], row["category"])
+
+def record_publication(offer_id, chat_id, url, category):
+    """Persist a successful publication immediately with a short SQLite retry."""
+    for attempt in range(4):
+        con = db()
+        try:
+            con.execute(
+                "INSERT INTO publish_history(offer_id, published_at) VALUES (?, CURRENT_TIMESTAMP)",
+                (offer_id,),
+            )
+            con.execute(
+                "INSERT INTO published_links(offer_id, chat_id, url, category, published_at) "
+                "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (offer_id, str(chat_id), url, category or "electronics"),
+            )
+            con.commit()
+            return True
+        except sqlite3.OperationalError as exc:
+            con.rollback()
+            if "locked" not in str(exc).lower() or attempt == 3:
+                log.exception("Publication save failed for offer %s", offer_id)
+                return False
+            time.sleep(0.15 * (attempt + 1))
+        except Exception:
+            con.rollback()
+            log.exception("Publication save failed for offer %s", offer_id)
+            return False
+        finally:
+            con.close()
+    return False
 
 def get_cached_offer_for_publish():
     # Never scrape at publish time. Prefer offers not published in the last
@@ -1356,6 +1400,16 @@ async def publish_offer(bot, row):
             for attempt in range(3):
                 try:
                     if await send_deal(channel):
+                        saved = await asyncio.to_thread(
+                            record_publication,
+                            row["id"], channel, row["url"], row["category"]
+                        )
+                        if not saved:
+                            log.error("⚠️ Telegram publish succeeded but DB save failed for deal %s to %s",
+                                      row["id"], channel)
+                        else:
+                            log.info("💾 Saved published link deal=%s category=%s chat=%s",
+                                     row["id"], row["category"], channel)
                         log.info("✅ Published deal %s to channel %s%s",
                                  row["id"], channel, " with image" if image_url else "")
                         channel_published = True
@@ -1416,8 +1470,8 @@ async def scan_and_publish(bot, manual=False):
             published = False
 
         if published:
-            mark_published(row["id"])
-            log.info("🚀 Published cached deal id=%s category=%s; discovery runs after publish",
+            log.info("🚀 Published cached deal id=%s category=%s; publication ledger updated immediately",
+
                      row["id"], category)
         else:
             log.warning("No configured channel accepted cached deal id=%s; scheduler continues",
@@ -1499,8 +1553,7 @@ async def scan_and_publish(bot, manual=False):
                 log.exception("Publishing cycle failed for newly cached offer")
                 published = False
             if published:
-                mark_published(row["id"])
-                log.info("🚀 Published newly cached deal id=%s", row["id"])
+                log.info("🚀 Published newly cached deal id=%s; publication ledger updated immediately", row["id"])
         else:
             log.error("No cached/fallback offer available for publishing")
             return "Added: 0\nFiltered/duplicate: 0\nCandidates checked: 0"
