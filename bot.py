@@ -1346,7 +1346,9 @@ async def publish_offer(bot, row):
         # Publishing is the first priority. One channel failure never stops
         # the next channel or the scheduler.
         targets = list(POST_CHANNELS)
-        if str(get_setting_sync("auto_group_publish", "0")) == "1":
+        # Group auto-publishing is ON by default. An explicit admin OFF
+        # remains respected, but a missing setting must never disable groups.
+        if str(get_setting_sync("auto_group_publish", "1")).strip().lower() in {"1", "true", "on", "yes"}:
             targets.extend(str(r["chat_id"]) for r in get_auto_publish_chats_sync())
         targets = list(dict.fromkeys(targets))
         for channel in targets:
