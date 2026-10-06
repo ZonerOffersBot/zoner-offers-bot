@@ -178,6 +178,12 @@ def init_db():
     )""")
     con.execute("""CREATE INDEX IF NOT EXISTS idx_published_links_offer_time
                    ON published_links(offer_id, published_at)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS manual_published_offers (
+        offer_id INTEGER PRIMARY KEY,
+        publish_count INTEGER NOT NULL DEFAULT 0,
+        first_published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
     con.execute("""CREATE TABLE IF NOT EXISTS verified_users (
         user_id INTEGER PRIMARY KEY,
         verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -837,11 +843,14 @@ async def _button_handler_impl(update, context):
             if i + 1 < count:
                 await asyncio.sleep(2)
 
+        saved = record_manual_publish(offer_id, success) if success else False
         await query.message.reply_text(
-            f"📢 <b>Manual publishing complete</b>\n\n"
+            "🟣 <b>𝗠𝗔𝗡𝗨𝗔𝗟 𝗣𝗨𝗕𝗟𝗜𝗦𝗛 𝗖𝗢𝗠𝗣𝗟𝗘𝗧𝗘</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
             f"🔁 Requested: <b>{count}</b>\n"
             f"✅ Successful: <b>{success}</b>\n"
-            f"❌ Failed: <b>{count - success}</b>",
+            f"❌ Failed: <b>{count - success}</b>\n"
+            f"💾 Saved in Re-publish Vault: <b>{'YES' if saved else 'NO'}</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=admin_menu(),
         )
@@ -884,21 +893,33 @@ async def _button_handler_impl(update, context):
         if not is_admin(update):
             await query.answer("Not authorized.", show_alert=True)
             return
-        rows = get_offers(limit=20)
+        rows = get_manual_published_offers(limit=30)
         if not rows:
             await query.edit_message_text(
-                "🔁 <b>Re-publish Saved Offer</b>\\n\\nNo saved offers available yet.",
-                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+                "🟣 <b>𝗭𝗢𝗡𝗘𝗥 𝗥𝗘-𝗣𝗨𝗕𝗟𝗜𝗦𝗛 𝗩𝗔𝗨𝗟𝗧</b>\\n"
+                "━━━━━━━━━━━━━━━━━━━━\\n\\n"
+                "📭 <b>No manually published offers saved yet.</b>\\n\\n"
+                "Manual <b>📢 Publish ×N</b> complete hote hi offer yahan automatically save ho jayega.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🛒 Add Product", callback_data="admin_addproduct")],
+                    [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")]
+                ]))
             return
         buttons = []
         for r in rows:
-            title = str(r["title"])[:42] + ("…" if len(str(r["title"])) > 42 else "")
+            title = str(r["title"])[:36] + ("…" if len(str(r["title"])) > 36 else "")
             buttons.append([InlineKeyboardButton(
-                f"🔁 {title}", callback_data=f"republish_menu_{r['id']}")])
+                f"🟣 🔁 {title} • ×{r['publish_count']}",
+                callback_data=f"republish_menu_{r['id']}")])
         buttons.append([InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")])
         await query.edit_message_text(
-            "🔁 <b>Re-publish Saved Offer</b>\\n\\n"
-            "Offer select karo; details dobara fill karne ki zarurat nahi hai.",
+            "🟣 <b>𝗭𝗢𝗡𝗘𝗥 𝗥𝗘-𝗣𝗨𝗕𝗟𝗜𝗦𝗛 𝗩𝗔𝗨𝗟𝗧</b>\\n"
+            "━━━━━━━━━━━━━━━━━━━━\\n"
+            "🗂️ <b>Manual Published Offers</b>\\n\\n"
+            "Sirf wahi offers yahan dikhte hain jo admin ne manually publish kiye hain.\\n"
+            "Auto-published deals is list me add nahi honge.\\n\\n"
+            "👇 Offer choose karo:",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(buttons))
         return
@@ -915,18 +936,22 @@ async def _button_handler_impl(update, context):
         if not row:
             await query.edit_message_text("❌ Offer no longer exists.", reply_markup=admin_menu())
             return
+        saved_count = int(row["publish_count"] or 0)
         await query.edit_message_text(
-            f"🔁 <b>Re-publish Offer</b>\\n\\n📦 {html.escape(str(row['title']))}\\n"
-            "Choose publish count:",
+            "🟣 <b>𝗥𝗘-𝗣𝗨𝗕𝗟𝗜𝗦𝗛 𝗢𝗙𝗙𝗘𝗥</b>\\n"
+            "━━━━━━━━━━━━━━━━━━━━\\n"
+            f"📦 <b>{html.escape(str(row['title']))}</b>\\n\\n"
+            f"💾 Manual publish history: <b>×{saved_count}</b>\\n"
+            "🎯 <b>Kitni baar dobara publish karna hai?</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("×1", callback_data=f"republish_{offer_id}_1"),
-                 InlineKeyboardButton("×5", callback_data=f"republish_{offer_id}_5"),
-                 InlineKeyboardButton("×10", callback_data=f"republish_{offer_id}_10")],
-                [InlineKeyboardButton("×25", callback_data=f"republish_{offer_id}_25"),
-                 InlineKeyboardButton("×50", callback_data=f"republish_{offer_id}_50"),
-                 InlineKeyboardButton("×100", callback_data=f"republish_{offer_id}_100")],
-                [InlineKeyboardButton("⬅️ Back", callback_data="admin_republish")]
+                [InlineKeyboardButton("🟣 ×1", callback_data=f"republish_{offer_id}_1"),
+                 InlineKeyboardButton("🟣 ×5", callback_data=f"republish_{offer_id}_5"),
+                 InlineKeyboardButton("🟣 ×10", callback_data=f"republish_{offer_id}_10")],
+                [InlineKeyboardButton("🟣 ×25", callback_data=f"republish_{offer_id}_25"),
+                 InlineKeyboardButton("🟣 ×50", callback_data=f"republish_{offer_id}_50"),
+                 InlineKeyboardButton("🟣 ×100", callback_data=f"republish_{offer_id}_100")],
+                [InlineKeyboardButton("⬅️ Vault", callback_data="admin_republish")]
             ]))
         return
 
@@ -958,6 +983,7 @@ async def _button_handler_impl(update, context):
                 log.exception("Re-publish %s/%s failed for offer %s", i + 1, count, offer_id)
             if i + 1 < count:
                 await asyncio.sleep(2)
+        saved = record_manual_publish(offer_id, success) if success else False
         await query.message.reply_text(
             f"📢 <b>Re-publishing complete</b>\\n\\n📦 {html.escape(str(row['title']))}\\n"
             f"🔁 Requested: <b>{count}</b>\\n✅ Successful: <b>{success}</b>\\n"
@@ -1201,9 +1227,12 @@ async def got_count(update, context):
 
     context.user_data.clear()
     await update.message.reply_text(
-        f"✅ <b>Offer added.</b>\\n\\n"
+        "🟣 <b>𝗠𝗔𝗡𝗨𝗔𝗟 𝗢𝗙𝗙𝗘𝗥 𝗥𝗘𝗔𝗗𝗬</b>\\n"
+        "━━━━━━━━━━━━━━━━━━━━\\n"
+        "✅ Offer saved.\\n\\n"
         f"🔁 Publish count: <b>{count}</b>\\n\\n"
-        "Neeche button dabakar publishing start karo.",
+        "👇 <b>📢 Publish ×N</b> dabakar publishing start karo.\\n"
+        "💾 Successful manual publish ke baad ye offer <b>Re-publish Vault</b> me save rahega.",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton(
@@ -1349,6 +1378,44 @@ def record_publication(offer_id, chat_id, url, category):
         finally:
             con.close()
     return False
+
+def record_manual_publish(offer_id, publish_count=1):
+    """Save/update an offer after a successful manual publication."""
+    count = max(1, int(publish_count))
+    con = db()
+    try:
+        con.execute(
+            """INSERT INTO manual_published_offers
+               (offer_id, publish_count, first_published_at, last_published_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+               ON CONFLICT(offer_id) DO UPDATE SET
+                 publish_count=manual_published_offers.publish_count + excluded.publish_count,
+                 last_published_at=CURRENT_TIMESTAMP""",
+            (offer_id, count),
+        )
+        con.commit()
+        return True
+    except Exception:
+        con.rollback()
+        log.exception("Manual-publish vault save failed for offer %s", offer_id)
+        return False
+    finally:
+        con.close()
+
+def get_manual_published_offers(limit=30):
+    """Return only offers that were actually manually published."""
+    con = db()
+    try:
+        return con.execute(
+            """SELECT o.*, m.publish_count, m.first_published_at, m.last_published_at
+               FROM manual_published_offers m
+               JOIN offers o ON o.id=m.offer_id
+               ORDER BY datetime(m.last_published_at) DESC, o.id DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    finally:
+        con.close()
 
 def get_cached_offer_for_publish():
     # Never scrape at publish time. Prefer offers not published in the last
