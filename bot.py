@@ -936,7 +936,7 @@ async def _button_handler_impl(update, context):
         if not row:
             await query.edit_message_text("❌ Offer no longer exists.", reply_markup=admin_menu())
             return
-        saved_count = int(row["publish_count"] or 0)
+        saved_count = get_manual_publish_count(offer_id)
         await query.edit_message_text(
             "🟣 <b>𝗥𝗘-𝗣𝗨𝗕𝗟𝗜𝗦𝗛 𝗢𝗙𝗙𝗘𝗥</b>\\n"
             "━━━━━━━━━━━━━━━━━━━━\\n"
@@ -1414,6 +1414,17 @@ def get_manual_published_offers(limit=30):
                LIMIT ?""",
             (limit,),
         ).fetchall()
+    finally:
+        con.close()
+
+def get_manual_publish_count(offer_id):
+    con = db()
+    try:
+        row = con.execute(
+            "SELECT publish_count FROM manual_published_offers WHERE offer_id=?",
+            (offer_id,),
+        ).fetchone()
+        return int(row["publish_count"]) if row else 0
     finally:
         con.close()
 
