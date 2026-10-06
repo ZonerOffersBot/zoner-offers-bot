@@ -1113,7 +1113,9 @@ async def got_count(update, context):
         "Manual", 0, 100
     )
     if not offer_id:
-        await update.message.reply_text("⚠️ This offer already exists (duplicate title + URL).")
+        await update.message.reply_text(
+            "⚠️ This offer already exists (duplicate title + URL)."
+        )
         context.user_data.clear()
         return ConversationHandler.END
 
@@ -1123,28 +1125,20 @@ async def got_count(update, context):
         context.user_data.clear()
         return ConversationHandler.END
 
+    context.user_data.clear()
     await update.message.reply_text(
         f"✅ <b>Offer added.</b>\\n\\n"
-        f"🔁 Publish count: <b>{count}</b>\\n\\n" + offer_text(row),
+        f"🔁 Publish count: <b>{count}</b>\\n\\n"
+        "Neeche button dabakar publishing start karo.",
         parse_mode=ParseMode.HTML,
-        reply_markup=offer_markup(row)
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                f"📢 Publish ×{count}",
+                callback_data=f"manual_publish:{offer_id}:{count}"
+            )],
+            [InlineKeyboardButton("❌ Cancel", callback_data="admin_close")],
+        ]),
     )
-
-    success = 0
-    for i in range(count):
-        try:
-            if await publish_offer(context.bot, row):
-                success += 1
-        except Exception:
-            log.exception("Manual publish %s/%s failed for offer %s", i + 1, count, offer_id)
-        if i + 1 < count:
-            await asyncio.sleep(2)
-
-    await update.message.reply_text(
-        f"📢 Manual publishing complete: <b>{success}/{count}</b> successful.",
-        parse_mode=ParseMode.HTML,
-    )
-    context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel(update, context):
