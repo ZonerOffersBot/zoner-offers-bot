@@ -111,6 +111,9 @@ def build_app():
             bot.C_URL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_url)
             ],
+            bot.C_COUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_count)
+            ],
         },
         fallbacks=[CommandHandler("cancel", bot.cancel)],
     )
