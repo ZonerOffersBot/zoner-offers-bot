@@ -881,6 +881,9 @@ async def _button_handler_impl(update, context):
         await query.edit_message_text("🔥 <b>Zoner Offers AI</b>\n\nChoose an option:", parse_mode=ParseMode.HTML, reply_markup=main_menu(query.from_user.id)); return
 
     if data == "admin_republish":
+        if not is_admin(update):
+            await query.answer("Not authorized.", show_alert=True)
+            return
         rows = get_offers(limit=20)
         if not rows:
             await query.edit_message_text(
@@ -901,6 +904,9 @@ async def _button_handler_impl(update, context):
         return
 
     if data.startswith("republish_menu_"):
+        if not is_admin(update):
+            await query.answer("Not authorized.", show_alert=True)
+            return
         try:
             offer_id = int(data.rsplit("_", 1)[1])
         except (ValueError, TypeError):
@@ -925,6 +931,9 @@ async def _button_handler_impl(update, context):
         return
 
     if data.startswith("republish_"):
+        if not is_admin(update):
+            await query.answer("Not authorized.", show_alert=True)
+            return
         try:
             _, offer_id_s, count_s = data.split("_", 2)
             offer_id = int(offer_id_s)
