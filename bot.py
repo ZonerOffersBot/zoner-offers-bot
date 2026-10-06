@@ -445,7 +445,7 @@ def required_channel_ref():
 def required_channel_url():
     channels = get_force_join_channels()
     if channels:
-        return channels[0].get("invite_url") or required_channel_url_legacy()
+        return channels[0]["invite_url"] or required_channel_url_legacy()
     return CHANNEL_URL
 
 async def membership_status(bot, user_id):
@@ -803,26 +803,15 @@ async def button_handler(update, context):
     try:
         await _button_handler_impl(update, context)
     except Exception as exc:
+        # Do not send a second message from callback error recovery.
         log.exception("Callback handler failed for %s: %s", getattr(query, "data", None), exc)
-        try:
-            if query:
-                await query.answer("Something went wrong. Please try again.", show_alert=True)
-        except Exception:
-            pass
-        try:
-            if query and query.message:
-                await query.message.reply_text(
-                    "⚠️ <b>Temporary reply error</b>\n\n"
-                    "The bot is still running. Please tap the button again.",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=main_menu(query.from_user.id) if query and query.from_user else None,
-                )
-        except Exception:
-            pass
 
 async def _button_handler_impl(update, context):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        log.debug("Callback acknowledgement failed for %s", getattr(query, "data", None))
     data = query.data
 
     if data == "check_join":
@@ -866,7 +855,6 @@ async def _button_handler_impl(update, context):
 
     if data.startswith("manual_publish:"):
         if not is_admin(update):
-            await query.answer("Not authorized.", show_alert=True)
             return
         try:
             _, offer_id_s, count_s = data.split(":", 2)
@@ -947,8 +935,7 @@ async def _button_handler_impl(update, context):
 
     if data == "admin_republish":
         if not is_admin(update):
-            await query.answer("Not authorized.", show_alert=True)
-            return
+                return
         rows = get_manual_published_offers(limit=30)
         if not rows:
             await query.edit_message_text(
@@ -1082,7 +1069,7 @@ async def _button_handler_impl(update, context):
             channels = get_force_join_channels()
             rows = []
             for idx, ch in enumerate(channels, 1):
-                label = html.escape(ch.get("title") or ch["chat_ref"])
+                label = html.escape(ch["title"] or ch["chat_ref"])
                 rows.append([InlineKeyboardButton(
                     f"🗑️ Delete {idx}: {label}", callback_data=f"force_delete:{ch['chat_ref']}"
                 )])
@@ -1111,14 +1098,13 @@ async def _button_handler_impl(update, context):
                 return
             ref = data.split(":", 1)[1]
             delete_force_join_channel(ref)
-            await query.answer("Channel removed.")
             channels = get_force_join_channels()
             await query.edit_message_text(
                 "📢 <b>Force Join Channels</b>\n\n"
                 f"Active required channels: <b>{len(channels)}</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([
-                    *[[InlineKeyboardButton(f"🗑️ Delete {i}: {html.escape(ch.get('title') or ch['chat_ref'])}",
+                    *[[InlineKeyboardButton(f"🗑️ Delete {i}: {html.escape(ch['title'] or ch['chat_ref'])}",
                                              callback_data=f"force_delete:{ch['chat_ref']}")] for i,ch in enumerate(channels,1)],
                     [InlineKeyboardButton("➕ Add Channel", callback_data="force_add")],
                     [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")]
