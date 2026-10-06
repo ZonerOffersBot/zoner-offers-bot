@@ -1,9 +1,11 @@
 """Stable production entry point for Zoner Offers Bot."""
-# ZONER_REPUBLISH_UI_2026_10_06
+# ZONER_BROADCAST_FIX_2026_10_06
+import asyncio
 import bot
 import runner
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from telegram.error import RetryAfter
 from telegram.ext import CommandHandler
 
 
@@ -47,7 +49,7 @@ async def _published_links(update, context):
         buttons.append([InlineKeyboardButton(f"🔗 {title}", callback_data=f"offer_{row['id']}")])
     buttons.append([InlineKeyboardButton("⬅️ Main Menu", callback_data="back")])
     await query.edit_message_text(
-        "📚 <b>Published Links</b>\n\nEvery successfully published link is saved permanently in the database and remains available here and under its saved category.",
+        "📚 <b>Published Links</b>\n\nEvery successfully published link is stored in the publication ledger and remains available here and under its saved category.",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -78,8 +80,19 @@ async def _patched_button_impl(update, context):
             await update.callback_query.answer("Not authorized.", show_alert=True)
             return
         await update.callback_query.answer()
+        con = bot.db()
+        try:
+            user_count = con.execute("SELECT COUNT(*) AS n FROM subscribers WHERE enabled=1").fetchone()["n"]
+        finally:
+            con.close()
         await update.callback_query.edit_message_text(
-            "📝 <b>Broadcast</b>\n\nSend <code>/broadcast your message</code> to broadcast to all users who have notifications enabled.\n\nExample:\n<code>/broadcast 🔥 New deals are live!</code>",
+            "📝 <b>BROADCAST CENTER</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👥 Active recipients: <b>{user_count}</b>\n\n"
+            "📢 <b>Send:</b> <code>/broadcast Your message</code>\n\n"
+            "Example:\n<code>/broadcast 🔥 New deals are live!</code>\n\n"
+            "Only users with Notifications ON receive it.\n"
+            "One failed user will NOT stop the remaining broadcast.",
             parse_mode=ParseMode.HTML,
             reply_markup=bot.admin_menu(),
         )
@@ -93,25 +106,62 @@ bot._button_handler_impl = _patched_button_impl
 async def broadcast_command(update, context):
     if not bot.is_admin(update):
         return
+
     args = getattr(context, "args", []) or []
     message = " ".join(args).strip()
     if not message:
-        await update.message.reply_text("❌ Use: <code>/broadcast your message</code>", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(
+            "📝 <b>Broadcast Center</b>\n\n"
+            "Use:\n<code>/broadcast Your message here</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=bot.admin_menu(),
+        )
         return
 
     con = bot.db()
-    users = con.execute("SELECT user_id FROM subscribers WHERE enabled=1").fetchall()
-    con.close()
-    sent = failed = 0
+    try:
+        users = con.execute("SELECT user_id FROM subscribers WHERE enabled=1").fetchall()
+    finally:
+        con.close()
+
+    sent = 0
+    failed = 0
+    retry_count = 0
+
+    await update.message.reply_text(
+        f"📢 <b>Broadcast started</b>\n\n👥 Recipients: <b>{len(users)}</b>\n⏳ Sending safely...",
+        parse_mode=ParseMode.HTML,
+    )
+
     for user in users:
+        chat_id = user["user_id"]
         try:
-            await context.bot.send_message(chat_id=user["user_id"], text=message)
+            await context.bot.send_message(chat_id=chat_id, text=message)
             sent += 1
+        except RetryAfter as exc:
+            retry_count += 1
+            wait_for = max(1.0, float(getattr(exc, "retry_after", 1)))
+            await asyncio.sleep(wait_for)
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=message)
+                sent += 1
+            except Exception as retry_exc:
+                failed += 1
+                bot.log.warning("Broadcast retry failed for %s: %s", chat_id, retry_exc)
         except Exception as exc:
             failed += 1
-            bot.log.warning("Broadcast failed for %s: %s", user["user_id"], exc)
+            bot.log.warning("Broadcast failed for %s: %s", chat_id, exc)
+
+        # Small pacing gap prevents a large subscriber list from hitting Telegram's rate limit.
+        await asyncio.sleep(0.05)
+
     await update.message.reply_text(
-        f"✅ <b>Broadcast complete</b>\n\n📨 Sent: <b>{sent}</b>\n⚠️ Failed: <b>{failed}</b>",
+        "✅ <b>BROADCAST COMPLETE</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"📨 Sent: <b>{sent}</b>\n"
+        f"❌ Failed: <b>{failed}</b>\n"
+        f"🔁 Rate-limit retries: <b>{retry_count}</b>\n"
+        f"👥 Total targeted: <b>{len(users)}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=bot.admin_menu(),
     )
