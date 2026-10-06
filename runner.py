@@ -89,6 +89,12 @@ def build_app():
     # Discover pre-existing groups when the bot receives any group message.
     # This complements MY_CHAT_MEMBER, which only fires on membership changes.
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, bot.track_group_message), group=1)
+    # Admin Force-Join channel setup input; consumed only while the admin
+    # has explicitly opened the Add Channel screen.
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_force_join_admin_text),
+        group=0,
+    )
     
     conversation = ConversationHandler(
         entry_points=[
