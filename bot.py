@@ -58,7 +58,7 @@ DB_FILE = os.getenv("DB_FILE", "/var/data/zoner_offers.db" if os.path.isdir("/va
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/zoneroffers").strip() or "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
 try:
-    SCAN_SECONDS = max(30, min(int(os.getenv("SCAN_SECONDS", "120")), 86400))
+    SCAN_SECONDS = max(30, min(int(os.getenv("SCAN_SECONDS", "60")), 86400))
 except (TypeError, ValueError):
     SCAN_SECONDS = 120
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
@@ -1203,18 +1203,31 @@ async def publish_offer(bot, row):
         image_url = ""
 
     async def send_deal(chat_id):
-        if not image_url:
-            log.warning("Mandatory image unavailable for deal %s; not publishing text-only post", row["id"])
-            return False
+        # Image-first publishing: use the real retailer image whenever available.
+        # If image enrichment is unavailable, fall back to a text post so a
+        # temporary retailer-image failure can NEVER stop the auto publisher.
+        if image_url:
+            try:
+                await bot.send_photo(
+                    chat_id=chat_id, photo=image_url, caption=text,
+                    parse_mode=ParseMode.HTML, reply_markup=markup,
+                    read_timeout=8, write_timeout=8
+                )
+                return True
+            except Exception as exc:
+                log.warning("Photo publish failed for %s to %s: %s; trying text fallback",
+                            row["id"], chat_id, exc)
         try:
-            await bot.send_photo(
-                chat_id=chat_id, photo=image_url, caption=text,
+            await bot.send_message(
+                chat_id=chat_id, text=text,
                 parse_mode=ParseMode.HTML, reply_markup=markup,
                 read_timeout=8, write_timeout=8
             )
+            log.info("Published text fallback for deal %s to %s (image unavailable)",
+                     row["id"], chat_id)
             return True
         except Exception as exc:
-            log.warning("Photo publish failed for %s to %s: %s", row["id"], chat_id, exc)
+            log.warning("Text publish failed for %s to %s: %s", row["id"], chat_id, exc)
             return False
 
     if AUTO_POST:
@@ -1392,7 +1405,10 @@ async def auto_scan_loop(app):
 
         try:
             interval = int(get_setting_sync("post_interval", SCAN_SECONDS))
-            interval = max(1, min(interval, 86400))
+            # Keep autonomous publishing responsive. Admin interval settings
+            # remain supported, but a stale/accidental huge value cannot make
+            # the publisher appear dead for hours.
+            interval = max(30, min(interval, 120))
         except (TypeError, ValueError):
             interval = SCAN_SECONDS
 
