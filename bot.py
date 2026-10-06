@@ -364,91 +364,122 @@ def score_deal(title, discount, source):
 # retry immediately. Successful verification is stored permanently in SQLite.
 MEMBERSHIP_CACHE_SECONDS = 0
 
-def required_channel_ref():
+def get_force_join_channels():
+    """Return active admin-managed force-join channels."""
+    con = db()
+    try:
+        con.execute("""CREATE TABLE IF NOT EXISTS force_join_channels (
+            chat_ref TEXT PRIMARY KEY,
+            title TEXT DEFAULT '',
+            invite_url TEXT DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        rows = con.execute(
+            "SELECT chat_ref, title, invite_url FROM force_join_channels "
+            "WHERE enabled=1 ORDER BY created_at ASC"
+        ).fetchall()
+        if rows:
+            return rows
+    finally:
+        con.close()
+    # Legacy fallback keeps the current configured channel working.
+    return [{"chat_ref": required_channel_ref_legacy(), "title": required_channel_ref_legacy(), "invite_url": required_channel_url_legacy()}]
+
+def required_channel_ref_legacy():
     ref = _normalize_chat_ref(CHANNEL_ID)
-    # A +invite link is not a valid Telegram chat_id for get_chat_member.
-    # Fall back to the public required channel instead of making every user
-    # fail verification because of a malformed Render env value.
     if not ref or ref.startswith(("https://", "http://", "t.me/")) or ref.startswith("+"):
-        if ref:
-            log.error("Invalid CHANNEL_ID for membership API: %r; using @zoneroffers", ref)
         return "@zoneroffers"
     return ref
 
-def required_channel_url():
-    ref = required_channel_ref()
+def required_channel_url_legacy():
+    ref = required_channel_ref_legacy()
     return "https://t.me/" + ref[1:] if ref.startswith("@") else CHANNEL_URL
 
+def add_force_join_channel(chat_ref, title="", invite_url=""):
+    ref = _normalize_chat_ref(chat_ref)
+    if not ref or ref.startswith(("https://", "http://", "t.me/", "+")):
+        return False
+    url = (invite_url or "").strip()
+    if not url and ref.startswith("@"):
+        url = "https://t.me/" + ref[1:]
+    con = db()
+    try:
+        con.execute("""CREATE TABLE IF NOT EXISTS force_join_channels (
+            chat_ref TEXT PRIMARY KEY, title TEXT DEFAULT '', invite_url TEXT DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        con.execute(
+            "INSERT INTO force_join_channels(chat_ref,title,invite_url,enabled) VALUES(?,?,?,1) "
+            "ON CONFLICT(chat_ref) DO UPDATE SET title=excluded.title, invite_url=excluded.invite_url, enabled=1",
+            (ref, title or ref, url),
+        )
+        con.commit()
+        return True
+    finally:
+        con.close()
+
+def delete_force_join_channel(chat_ref):
+    con = db()
+    try:
+        con.execute("UPDATE force_join_channels SET enabled=0 WHERE chat_ref=?", (chat_ref,))
+        changed = con.total_changes > 0
+        con.commit()
+        return changed
+    finally:
+        con.close()
+
+def required_channel_ref():
+    channels = get_force_join_channels()
+    return channels[0]["chat_ref"] if channels else "@zoneroffers"
+
+def required_channel_url():
+    channels = get_force_join_channels()
+    if channels:
+        return channels[0].get("invite_url") or required_channel_url_legacy()
+    return CHANNEL_URL
+
 async def membership_status(bot, user_id):
-    # Lifetime verification fast-path. Once stored, Telegram is never queried
-    # again for that user, so a valid verification cannot randomly flip back.
     if is_user_verified(user_id):
         return True
 
-    required_channel = required_channel_ref()
-    try:
-        # Resolve the channel first. This catches a wrong/private invite-link
-        # configuration early and gives a useful diagnostic in Render logs.
-        chat = await asyncio.wait_for(
-            bot.get_chat(chat_id=required_channel),
-            timeout=8.0
-        )
-        last_status = ""
-        last_member_flag = None
-        for attempt in range(3):
-            try:
-                member = await asyncio.wait_for(
-                    bot.get_chat_member(chat_id=chat.id, user_id=user_id),
-                    timeout=10.0
-                )
-                status = str(getattr(member, "status", "")).lower()
-                is_member = getattr(member, "is_member", None)
-                last_status = status
-                last_member_flag = is_member
-                verified = status in {"member", "administrator", "creator"} or (
-                    status == "restricted" and is_member is True
-                )
-                if verified:
-                    mark_user_verified(user_id)
-                    log.info(
-                        "Force-join verified user=%s channel=%s chat_id=%s status=%s attempt=%s",
-                        user_id, required_channel, chat.id, status, attempt + 1
+    # A first-time user must pass every currently configured required channel.
+    for channel in get_force_join_channels():
+        required_channel = channel["chat_ref"]
+        try:
+            chat = await asyncio.wait_for(bot.get_chat(chat_id=required_channel), timeout=8.0)
+            passed = False
+            for attempt in range(3):
+                try:
+                    member = await asyncio.wait_for(
+                        bot.get_chat_member(chat_id=chat.id, user_id=user_id), timeout=10.0
                     )
-                    return True
-                # A fresh Telegram response says the account is not a member.
-                # Do not cache this negative result; the user may have joined
-                # seconds ago and the next check should be allowed to succeed.
-                log.info(
-                    "Force-join rejected user=%s channel=%s chat_id=%s status=%s is_member=%s attempt=%s",
-                    user_id, required_channel, chat.id, status, is_member, attempt + 1
-                )
-                if attempt < 2:
-                    await asyncio.sleep(1.0)
-                    continue
+                    status = str(getattr(member, "status", "")).lower()
+                    is_member = getattr(member, "is_member", None)
+                    passed = status in {"member", "administrator", "creator"} or (
+                        status == "restricted" and is_member is True
+                    )
+                    if passed:
+                        break
+                    if attempt < 2:
+                        await asyncio.sleep(1.0)
+                except Exception as exc:
+                    log.warning("Force-join check failed channel=%s user=%s attempt=%s: %s",
+                                required_channel, user_id, attempt + 1, exc)
+                    if attempt < 2:
+                        await asyncio.sleep(1.0)
+                    else:
+                        return False
+            if not passed:
                 return False
-            except Exception as exc:
-                log.warning(
-                    "Force-join membership API attempt %s/3 failed channel=%s user=%s: %s (%s)",
-                    attempt + 1, required_channel, user_id, exc, type(exc).__name__
-                )
-                if attempt < 2:
-                    await asyncio.sleep(1.0)
-                else:
-                    raise
-        log.warning(
-            "Force-join final rejection user=%s channel=%s status=%s is_member=%s",
-            user_id, required_channel, last_status, last_member_flag
-        )
-        return False
-    except Exception as exc:
-        # Never bypass verification when Telegram cannot answer. Keep the
-        # failure visible in logs so a bad CHANNEL_ID / missing bot admin
-        # permission can be fixed instead of producing a silent false result.
-        log.warning(
-            "Force-join API check failed channel=%s user=%s: %s (%s)",
-            required_channel, user_id, exc, type(exc).__name__
-        )
-        return False
+        except Exception as exc:
+            log.warning("Force-join API check failed channel=%s user=%s: %s",
+                        required_channel, user_id, exc)
+            return False
+
+    mark_user_verified(user_id)
+    return True
+
 
 async def force_join_diagnostics(bot):
     """Log exact required-channel configuration/permissions at startup."""
@@ -477,24 +508,24 @@ async def force_join_diagnostics(bot):
         return False
 
 def join_gate_markup():
-    rows = [[InlineKeyboardButton(
-        "📢 Join Required Channel", url=required_channel_url()
-    )]]
-    if SECOND_CHANNEL_URL:
-        rows.append([InlineKeyboardButton(
-            "📢 Second Channel (Optional)", url=SECOND_CHANNEL_URL
-        )])
-    rows.append([InlineKeyboardButton(
-        "🚀 Continue to Bot", callback_data="check_join"
-    )])
+    rows = []
+    for idx, channel in enumerate(get_force_join_channels(), 1):
+        url = channel.get("invite_url") or ""
+        ref = channel["chat_ref"]
+        if not url and ref.startswith("@"):
+            url = "https://t.me/" + ref[1:]
+        if url:
+            rows.append([InlineKeyboardButton(f"📢 Join Required Channel {idx}", url=url)])
+    rows.append([InlineKeyboardButton("🚀 Continue to Bot", callback_data="check_join")])
     return InlineKeyboardMarkup(rows)
 
 def join_gate_text():
+    count = len(get_force_join_channels())
     return (
         "🔐 <b>Join Required</b>\n\n"
-        "Zoner Offers AI use karne se pehle hamare <b>required channel</b> ko join karein.\n\n"
-        "Join karne ke baad <b>✅ I Joined — Check Again</b> dabayein.\n"
-        "Verification successful hone ke baad aapko dobara join gate nahi dikhega."
+        f"Zoner Offers AI use karne se pehle <b>{count}</b> required channel(s) join karein.\n\n"
+        "Join ke baad <b>🚀 Continue to Bot</b> dabayein.\n"
+        "Successful verification ke baad ye page dobara nahi aayega."
     )
 
 def get_auto_publish_chats_sync():
@@ -706,6 +737,22 @@ async def start(update, context):
         join_gate_text(),
         parse_mode=ParseMode.HTML,
         reply_markup=join_gate_markup(),
+    )
+
+async def handle_force_join_admin_text(update, context):
+    if not is_admin(update) or not context.user_data.get("force_join_add"):
+        return
+    raw = (getattr(update.message, "text", "") or "").strip()
+    parts = [p.strip() for p in raw.split("|", 1)]
+    ref = parts[0] if parts else ""
+    invite = parts[1] if len(parts) > 1 else ""
+    if not add_force_join_channel(ref, title=ref, invite_url=invite):
+        await update.message.reply_text("❌ Invalid channel. Use @username or -100... | invite URL.")
+        return
+    context.user_data.pop("force_join_add", None)
+    await update.message.reply_text(
+        f"✅ <b>Force-join channel added:</b> {html.escape(ref)}",
+        parse_mode=ParseMode.HTML, reply_markup=admin_menu()
     )
 
 async def help_command(update, context):
@@ -1023,11 +1070,50 @@ async def _button_handler_impl(update, context):
                 parse_mode=ParseMode.HTML, reply_markup=admin_menu())
             return
         if data == "admin_force":
+            channels = get_force_join_channels()
+            rows = []
+            for idx, ch in enumerate(channels, 1):
+                label = html.escape(ch.get("title") or ch["chat_ref"])
+                rows.append([InlineKeyboardButton(
+                    f"🗑️ Delete {idx}: {label}", callback_data=f"force_delete:{ch['chat_ref']}"
+                )])
+            rows.append([InlineKeyboardButton("➕ Add Channel", callback_data="force_add")])
+            rows.append([InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")])
             await query.edit_message_text(
                 "📢 <b>Force Join Channels</b>\n\n"
-                f"Required channel: <code>{html.escape(CHANNEL_ID or '@zoneroffers')}</code>\n"
-                "Publishing channels are NOT verification requirements.",
-                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+                f"Active required channels: <b>{len(channels)}</b>\n\n"
+                "New users ko first /start par ye channels join karne honge. "
+                "Verified users ko lifetime verification ke baad dobara gate nahi dikhega.",
+                parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
+            return
+        if data == "force_add":
+            context.user_data["force_join_add"] = True
+            await query.edit_message_text(
+                "➕ <b>Add Force-Join Channel</b>\n\n"
+                "Public channel: <code>@channelusername</code>\n"
+                "Private channel: <code>-1001234567890 | https://t.me/+invite</code>\n\n"
+                "Channel me bot ko Administrator hona chahiye.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_force")]]))
+            return
+        if data.startswith("force_delete:"):
+            if not is_admin(update):
+                await query.answer("Not authorized.", show_alert=True)
+                return
+            ref = data.split(":", 1)[1]
+            delete_force_join_channel(ref)
+            await query.answer("Channel removed.")
+            channels = get_force_join_channels()
+            await query.edit_message_text(
+                "📢 <b>Force Join Channels</b>\n\n"
+                f"Active required channels: <b>{len(channels)}</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    *[[InlineKeyboardButton(f"🗑️ Delete {i}: {html.escape(ch.get('title') or ch['chat_ref'])}",
+                                             callback_data=f"force_delete:{ch['chat_ref']}")] for i,ch in enumerate(channels,1)],
+                    [InlineKeyboardButton("➕ Add Channel", callback_data="force_add")],
+                    [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")]
+                ]))
             return
         if data == "admin_menu":
             await query.edit_message_text(
