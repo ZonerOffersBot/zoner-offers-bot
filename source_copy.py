@@ -112,7 +112,12 @@ async def _send_post(bot, app, post):
     destinations = list(dict.fromkeys(bot.POST_CHANNELS))
     # Also reuse the existing auto-publish group registry.
     try:
-        destinations.extend([str(r["chat_id"]) for r in bot.get_auto_publish_chats() if r["enabled"]])
+        con = bot.db()
+        try:
+            rows = con.execute("SELECT chat_id FROM auto_publish_chats WHERE enabled=1").fetchall()
+        finally:
+            con.close()
+        destinations.extend([str(r["chat_id"]) for r in rows])
     except Exception:
         log.exception("Could not read auto-publish group registry")
 
