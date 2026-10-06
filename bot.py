@@ -1811,11 +1811,10 @@ async def scan_and_publish(bot, manual=False):
 
 
 async def auto_scan_loop(app):
-    """Single production publishing loop with admin-configurable interval.
+    """Single production publishing loop with a strict 15-minute cadence.
 
-    The runner starts only this loop, preventing duplicate APScheduler jobs.
-    The interval is read from the live bot database every cycle, so an admin
-    change takes effect without redeploying or interrupting publishing.
+    The runner starts only this loop. Production auto-publishing is locked to
+    900 seconds (15 minutes); the database cannot override this cadence.
     """
     while True:
         cycle_started = asyncio.get_running_loop().time()
@@ -1825,26 +1824,25 @@ async def auto_scan_loop(app):
         except Exception:
             log.exception("AI scan failed")
 
+        # STRICT PRODUCTION LOCK: auto-publishing is always every 15 minutes.
+        # Keep the persisted setting normalized to 900 so stale/admin values
+        # cannot change the production cadence.
+        interval = 900
         try:
-            # Production publishing cadence is fixed at 15 minutes.
-            # Replace any stale legacy value (for example 120 seconds) so an
-            # old database setting cannot silently keep publishing every 2 min.
-            interval = 900
-            if get_setting_sync("post_interval", 900) != 900:
-                con = db()
-                try:
-                    con.execute(
-                        "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
-                    )
-                    con.execute(
-                        "INSERT INTO settings(key, value) VALUES('post_interval', '900') "
-                        "ON CONFLICT(key) DO UPDATE SET value='900'"
-                    )
-                    con.commit()
-                finally:
-                    con.close()
-        except (TypeError, ValueError):
-            interval = SCAN_SECONDS
+            con = db()
+            try:
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
+                )
+                con.execute(
+                    "INSERT INTO settings(key, value) VALUES('post_interval', '900') "
+                    "ON CONFLICT(key) DO UPDATE SET value='900'"
+                )
+                con.commit()
+            finally:
+                con.close()
+        except Exception:
+            log.exception("Could not normalize post_interval; using strict 900-second cadence.")
 
         elapsed = asyncio.get_running_loop().time() - cycle_started
         await asyncio.sleep(max(1.0, interval - elapsed))
@@ -1923,18 +1921,16 @@ async def add_menu_item(update, context):
     )
 
 async def set_interval_command(update, context):
-    """Admin-only: persist the auto-post interval without redeploying."""
+    """Admin-only status command; production cadence stays locked at 15 minutes."""
     if not is_admin(update):
         return
-    args = getattr(context, "args", []) or []
-    if not args:
-        current = get_setting_sync("post_interval", SCAN_SECONDS)
-        await update.message.reply_text(
-            f"⏰ Current post interval: <b>{current} seconds</b>\\n"
-            "Use: <code>/setinterval 1800</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
+    await update.message.reply_text(
+        "⏰ <b>Auto Publishing Interval</b>\\n\\n"
+        "🔒 Strictly locked: <b>900 seconds (15 minutes)</b>.\\n"
+        "This cannot be changed until the administrator explicitly requests an interval change.",
+        parse_mode=ParseMode.HTML,
+    )
+    return
     try:
         seconds = int(args[0])
     except (TypeError, ValueError):
