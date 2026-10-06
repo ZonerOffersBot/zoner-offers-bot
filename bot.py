@@ -60,7 +60,7 @@ SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerlelot
 try:
     SCAN_SECONDS = max(30, min(int(os.getenv("SCAN_SECONDS", "900")), 86400))
 except (TypeError, ValueError):
-    SCAN_SECONDS = 120
+    SCAN_SECONDS = 900
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 # Fresh product discovery is allowed once every 2 hours; publishing itself
 # continues on the normal interval and never waits for live scraping.
@@ -1406,11 +1406,23 @@ async def auto_scan_loop(app):
             log.exception("AI scan failed")
 
         try:
-            interval = int(get_setting_sync("post_interval", SCAN_SECONDS))
-            # Keep autonomous publishing responsive. Admin interval settings
-            # remain supported, but a stale/accidental huge value cannot make
-            # the publisher appear dead for hours.
-            interval = max(30, min(interval, 86400))
+            # Production publishing cadence is fixed at 15 minutes.
+            # Replace any stale legacy value (for example 120 seconds) so an
+            # old database setting cannot silently keep publishing every 2 min.
+            interval = 900
+            if get_setting_sync("post_interval", 900) != 900:
+                con = db()
+                try:
+                    con.execute(
+                        "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
+                    )
+                    con.execute(
+                        "INSERT INTO settings(key, value) VALUES('post_interval', '900') "
+                        "ON CONFLICT(key) DO UPDATE SET value='900'"
+                    )
+                    con.commit()
+                finally:
+                    con.close()
         except (TypeError, ValueError):
             interval = SCAN_SECONDS
 
