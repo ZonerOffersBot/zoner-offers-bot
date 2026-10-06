@@ -1,0 +1,50 @@
+name: Zoner Save Ledger 100x Verification
+on:
+  push:
+    branches:
+      - "qa-save-100x-*"
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q .
+      - name: Import 100 times
+        env: {DB_FILE: /tmp/z.db}
+        run: |
+          for i in $(seq 1 100); do
+            rm -f /tmp/z.db
+            python -c "import bot,runner,main; bot.init_db(); print('IMPORT PASS $i')"
+          done
+      - name: Publication ledger 100 times
+        env: {DB_FILE: /tmp/ledger.db}
+        run: |
+          rm -f /tmp/ledger.db
+          python - <<'PY'
+          import asyncio, os
+          os.environ["DB_FILE"]="/tmp/ledger.db"
+          import bot
+          bot.init_db()
+          class FakeBot:
+              async def send_message(self, **kwargs): return True
+              async def send_photo(self, **kwargs): return True
+          async def run():
+              fake=FakeBot()
+              for i in range(100):
+                  oid=bot.insert_offer(f"Ledger {i}","999","1999","electronics",f"https://example.com/ledger/{i}","QA",50,90)
+                  row=bot.get_offer(oid)
+                  assert await bot.publish_offer(fake,row)
+                  con=bot.db()
+                  saved=con.execute("SELECT url,category FROM published_links WHERE offer_id=? ORDER BY id DESC LIMIT 1",(oid,)).fetchone()
+                  hist=con.execute("SELECT 1 FROM publish_history WHERE offer_id=? LIMIT 1",(oid,)).fetchone()
+                  con.close()
+                  assert saved and saved["url"]==row["url"] and saved["category"]=="electronics"
+                  assert hist
+              print("PUBLISHED LEDGER 100/100 PASS")
+          asyncio.run(run())
+          PY
