@@ -253,7 +253,7 @@ def get_offers(category=None, price_max=None, price_min=None, limit=20):
     if price_max is not None:
         conditions.append("CAST(REPLACE(o.price, ',', '') AS REAL) <= ?")
         params.append(price_max)
-    where = " WHERE " + " AND ".join(conditions)
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
     params.append(limit)
     rows = con.execute(
         "SELECT o.* FROM offers o "
