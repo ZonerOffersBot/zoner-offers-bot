@@ -1102,12 +1102,47 @@ async def _button_handler_impl(update, context):
             buttons = [[InlineKeyboardButton(f"🗑️ {r['title'][:35]}", callback_data=f"delete_{r['id']}")] for r in rows]
             buttons.append([InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")])
             await query.edit_message_text("📋 <b>Manage Offers</b>\n\nTap an offer to delete it:", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons)); return
-        if data == "admin_stats":
+        if data in {"admin_stats", "admin_stats_refresh"}:
+            # Read every metric live from SQLite when the Stats screen is opened/refreshed.
+            con = db()
+            try:
+                started = int(con.execute("SELECT COUNT(*) AS n FROM subscribers").fetchone()["n"])
+                notifications_on = int(con.execute("SELECT COUNT(*) AS n FROM subscribers WHERE enabled=1").fetchone()["n"])
+                notifications_off = int(con.execute("SELECT COUNT(*) AS n FROM subscribers WHERE enabled=0").fetchone()["n"])
+                verified = int(con.execute("SELECT COUNT(*) AS n FROM verified_users").fetchone()["n"])
+                groups = int(con.execute(
+                    "SELECT COUNT(*) AS n FROM auto_publish_chats WHERE enabled=1 AND chat_type IN ('group','supergroup')"
+                ).fetchone()["n"])
+                published = int(con.execute("SELECT COUNT(*) AS n FROM published_links").fetchone()["n"])
+                unique_published_offers = int(con.execute(
+                    "SELECT COUNT(DISTINCT offer_id) AS n FROM published_links"
+                ).fetchone()["n"])
+                total_offers = int(con.execute("SELECT COUNT(*) AS n FROM offers").fetchone()["n"])
+            finally:
+                con.close()
+
             await query.edit_message_text(
-                "📊 <b>Zoner AI Stats</b>\n\n"
-                f"🛍️ Offers: <b>{offer_count()}</b>\n🔔 Subscribers: <b>{subscriber_count()}</b>\n"
-                f"⏱️ Auto publishing: <b>15 minutes</b> (900 sec)\n🎯 Min score: <b>{MIN_DEAL_SCORE}</b>",
-                parse_mode=ParseMode.HTML, reply_markup=admin_menu()); return
+                "📊 <b>ZONER AI — LIVE STATS</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 <b>Started Bot:</b> {started}\n"
+                f"✅ <b>Channel Verified/Joined:</b> {verified}\n"
+                f"🔔 <b>Notifications ON:</b> {notifications_on}\n"
+                f"🔕 <b>Notifications OFF:</b> {notifications_off}\n"
+                f"👥 <b>Active Auto-Publish Groups:</b> {groups}\n"
+                f"🛍️ <b>Total Offers:</b> {total_offers}\n"
+                f"📢 <b>Published Link Records:</b> {published}\n"
+                f"🎯 <b>Unique Published Offers:</b> {unique_published_offers}\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "⏱️ <b>Auto Publishing:</b> 15 minutes (900 sec)\n"
+                f"🎯 <b>Minimum Deal Score:</b> {MIN_DEAL_SCORE}\n\n"
+                "🟢 Stats are read live from the bot database.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Refresh Live Stats", callback_data="admin_stats_refresh")],
+                    [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")],
+                ]),
+            )
+            return
         if data == "admin_panel":
             await query.edit_message_text("🔐 <b>AI Admin Panel</b>\n\nChoose an action:", parse_mode=ParseMode.HTML, reply_markup=admin_menu()); return
 
