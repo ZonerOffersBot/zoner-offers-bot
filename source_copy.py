@@ -21,7 +21,7 @@ log = logging.getLogger("zoner")
 
 SOURCE_CHANNEL = os.getenv("SOURCE_CHANNEL", "@Flipkartdj").strip()
 COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
-COPY_INTERVAL = 60
+COPY_INTERVAL = 30
 
 def _username():
     value = SOURCE_CHANNEL.strip()
