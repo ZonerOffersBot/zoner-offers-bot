@@ -880,6 +880,83 @@ async def _button_handler_impl(update, context):
     if data == "back":
         await query.edit_message_text("🔥 <b>Zoner Offers AI</b>\n\nChoose an option:", parse_mode=ParseMode.HTML, reply_markup=main_menu(query.from_user.id)); return
 
+    if data == "admin_republish":
+        rows = get_offers(limit=20)
+        if not rows:
+            await query.edit_message_text(
+                "🔁 <b>Re-publish Saved Offer</b>\\n\\nNo saved offers available yet.",
+                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+            return
+        buttons = []
+        for r in rows:
+            title = str(r["title"])[:42] + ("…" if len(str(r["title"])) > 42 else "")
+            buttons.append([InlineKeyboardButton(
+                f"🔁 {title}", callback_data=f"republish_menu_{r['id']}")])
+        buttons.append([InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")])
+        await query.edit_message_text(
+            "🔁 <b>Re-publish Saved Offer</b>\\n\\n"
+            "Offer select karo; details dobara fill karne ki zarurat nahi hai.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data.startswith("republish_menu_"):
+        try:
+            offer_id = int(data.rsplit("_", 1)[1])
+        except (ValueError, TypeError):
+            return
+        row = get_offer(offer_id)
+        if not row:
+            await query.edit_message_text("❌ Offer no longer exists.", reply_markup=admin_menu())
+            return
+        await query.edit_message_text(
+            f"🔁 <b>Re-publish Offer</b>\\n\\n📦 {html.escape(str(row['title']))}\\n"
+            "Choose publish count:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("×1", callback_data=f"republish_{offer_id}_1"),
+                 InlineKeyboardButton("×5", callback_data=f"republish_{offer_id}_5"),
+                 InlineKeyboardButton("×10", callback_data=f"republish_{offer_id}_10")],
+                [InlineKeyboardButton("×25", callback_data=f"republish_{offer_id}_25"),
+                 InlineKeyboardButton("×50", callback_data=f"republish_{offer_id}_50"),
+                 InlineKeyboardButton("×100", callback_data=f"republish_{offer_id}_100")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="admin_republish")]
+            ]))
+        return
+
+    if data.startswith("republish_"):
+        try:
+            _, offer_id_s, count_s = data.split("_", 2)
+            offer_id = int(offer_id_s)
+            count = max(1, min(int(count_s), 100))
+        except (ValueError, TypeError):
+            await query.edit_message_text("❌ Invalid re-publish request.", reply_markup=admin_menu())
+            return
+        row = get_offer(offer_id)
+        if not row:
+            await query.edit_message_text("❌ Offer no longer exists.", reply_markup=admin_menu())
+            return
+        await query.edit_message_text(
+            f"🚀 <b>Re-publishing started</b>\\n\\n📦 {html.escape(str(row['title']))}\\n"
+            f"🔁 Requested: <b>{count}</b>\\n⏳ Please wait...",
+            parse_mode=ParseMode.HTML)
+        success = 0
+        for i in range(count):
+            try:
+                if await publish_offer(context.bot, row):
+                    success += 1
+            except Exception:
+                log.exception("Re-publish %s/%s failed for offer %s", i + 1, count, offer_id)
+            if i + 1 < count:
+                await asyncio.sleep(2)
+        await query.message.reply_text(
+            f"📢 <b>Re-publishing complete</b>\\n\\n📦 {html.escape(str(row['title']))}\\n"
+            f"🔁 Requested: <b>{count}</b>\\n✅ Successful: <b>{success}</b>\\n"
+            f"❌ Failed: <b>{count-success}</b>",
+            parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+        return
+
+
     if data.startswith("admin_"):
         if not is_admin(update):
             await query.answer("Not authorized.", show_alert=True); return
@@ -934,82 +1011,6 @@ async def _button_handler_impl(update, context):
                 "Broadcast UI reserved here; existing subscriber notifications remain unchanged.",
                 parse_mode=ParseMode.HTML, reply_markup=admin_menu())
             return
-        if data == "admin_republish":
-            rows = get_offers(limit=20)
-            if not rows:
-                await query.edit_message_text(
-                    "🔁 <b>Re-publish Saved Offer</b>\\n\\nNo saved offers available yet.",
-                    parse_mode=ParseMode.HTML, reply_markup=admin_menu())
-                return
-            buttons = []
-            for r in rows:
-                title = str(r["title"])[:42] + ("…" if len(str(r["title"])) > 42 else "")
-                buttons.append([InlineKeyboardButton(
-                    f"🔁 {title}", callback_data=f"republish_menu_{r['id']}")])
-            buttons.append([InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")])
-            await query.edit_message_text(
-                "🔁 <b>Re-publish Saved Offer</b>\\n\\n"
-                "Offer select karo; details dobara fill karne ki zarurat nahi hai.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(buttons))
-            return
-
-        if data.startswith("republish_menu_"):
-            try:
-                offer_id = int(data.rsplit("_", 1)[1])
-            except (ValueError, TypeError):
-                return
-            row = get_offer(offer_id)
-            if not row:
-                await query.edit_message_text("❌ Offer no longer exists.", reply_markup=admin_menu())
-                return
-            await query.edit_message_text(
-                f"🔁 <b>Re-publish Offer</b>\\n\\n📦 {html.escape(str(row['title']))}\\n"
-                "Choose publish count:",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("×1", callback_data=f"republish_{offer_id}_1"),
-                     InlineKeyboardButton("×5", callback_data=f"republish_{offer_id}_5"),
-                     InlineKeyboardButton("×10", callback_data=f"republish_{offer_id}_10")],
-                    [InlineKeyboardButton("×25", callback_data=f"republish_{offer_id}_25"),
-                     InlineKeyboardButton("×50", callback_data=f"republish_{offer_id}_50"),
-                     InlineKeyboardButton("×100", callback_data=f"republish_{offer_id}_100")],
-                    [InlineKeyboardButton("⬅️ Back", callback_data="admin_republish")]
-                ]))
-            return
-
-        if data.startswith("republish_"):
-            try:
-                _, offer_id_s, count_s = data.split("_", 2)
-                offer_id = int(offer_id_s)
-                count = max(1, min(int(count_s), 100))
-            except (ValueError, TypeError):
-                await query.edit_message_text("❌ Invalid re-publish request.", reply_markup=admin_menu())
-                return
-            row = get_offer(offer_id)
-            if not row:
-                await query.edit_message_text("❌ Offer no longer exists.", reply_markup=admin_menu())
-                return
-            await query.edit_message_text(
-                f"🚀 <b>Re-publishing started</b>\\n\\n📦 {html.escape(str(row['title']))}\\n"
-                f"🔁 Requested: <b>{count}</b>\\n⏳ Please wait...",
-                parse_mode=ParseMode.HTML)
-            success = 0
-            for i in range(count):
-                try:
-                    if await publish_offer(context.bot, row):
-                        success += 1
-                except Exception:
-                    log.exception("Re-publish %s/%s failed for offer %s", i + 1, count, offer_id)
-                if i + 1 < count:
-                    await asyncio.sleep(2)
-            await query.message.reply_text(
-                f"📢 <b>Re-publishing complete</b>\\n\\n📦 {html.escape(str(row['title']))}\\n"
-                f"🔁 Requested: <b>{count}</b>\\n✅ Successful: <b>{success}</b>\\n"
-                f"❌ Failed: <b>{count-success}</b>",
-                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
-            return
-
         if data == "admin_addproduct":
             await query.message.reply_text(
                 "🛒 <b>Add Product</b>\n\nUse /addoffer for the manual product/deal form.",
