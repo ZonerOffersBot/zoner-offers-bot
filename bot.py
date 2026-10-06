@@ -491,6 +491,44 @@ def get_auto_publish_chats_sync():
     finally:
         con.close()
 
+async def track_group_message(update, context):
+    """Discover an existing group/supergroup when the bot receives a message there.
+    Telegram does not expose an API to enumerate all historical chats a bot joined,
+    so this safely verifies the bot's current membership/permissions on first contact.
+    """
+    chat = getattr(update, "effective_chat", None)
+    if not chat or getattr(chat, "type", "") not in ("group", "supergroup"):
+        return
+    try:
+        member = await context.bot.get_chat_member(chat.id, context.bot.id)
+        status = str(getattr(member, "status", "")).lower()
+        can_send = getattr(member, "can_send_messages", True)
+        can_post = getattr(member, "can_post_messages", True)
+        if status not in {"administrator", "creator", "member", "restricted"}:
+            return
+        if status == "restricted" and can_send is False:
+            return
+        if status == "administrator" and can_post is False:
+            return
+        con = db()
+        try:
+            con.execute("""CREATE TABLE IF NOT EXISTS auto_publish_chats (
+                chat_id INTEGER PRIMARY KEY, title TEXT DEFAULT '', chat_type TEXT DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+            con.execute(
+                """INSERT INTO auto_publish_chats(chat_id,title,chat_type,enabled,updated_at)
+                   VALUES(?,?,?,?,CURRENT_TIMESTAMP)
+                   ON CONFLICT(chat_id) DO UPDATE SET title=excluded.title,
+                   chat_type=excluded.chat_type, enabled=1, updated_at=CURRENT_TIMESTAMP""",
+                (chat.id, getattr(chat, "title", "") or "", chat.type, 1),
+            )
+            con.commit()
+        finally:
+            con.close()
+    except Exception as exc:
+        log.debug("Existing group discovery failed for %s: %s", getattr(chat, "id", None), exc)
+
 async def track_auto_publish_chat(update, context):
     """Register groups/supergroups the bot joins for optional auto publishing."""
     member_update = getattr(update, "my_chat_member", None)
