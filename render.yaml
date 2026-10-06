@@ -3,7 +3,7 @@ services:
     name: telegram-deal-bot
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt && python -m py_compile bot.py runner.py main.py && python -c "import bot, runner, main; print('Zoner import smoke test: OK')"
+    buildCommand: pip install -r requirements.txt && python -m compileall -q . && python -c "import bot, runner, main; print('Zoner import smoke test: OK')"
     startCommand: python main.py
     healthCheckPath: /health
     envVars:
@@ -37,4 +37,3 @@ services:
         value: "45"
       - key: PYTHON_VERSION
         value: "3.11.9"
-
