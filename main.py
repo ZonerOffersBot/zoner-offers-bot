@@ -125,6 +125,9 @@ def build_app():
     return app
 
 
+runner.build_app = build_app
+
+
 def run():
     return runner.run()
 
