@@ -379,12 +379,21 @@ def get_force_join_channels():
             "SELECT chat_ref, title, invite_url FROM force_join_channels "
             "WHERE enabled=1 ORDER BY created_at ASC"
         ).fetchall()
-        if rows:
-            return rows
+        if not rows:
+            # Seed the current legacy channel only once for existing deployments.
+            legacy = required_channel_ref_legacy()
+            con.execute(
+                "INSERT OR IGNORE INTO force_join_channels(chat_ref,title,invite_url,enabled) VALUES(?,?,?,1)",
+                (legacy, legacy, required_channel_url_legacy()),
+            )
+            con.commit()
+            rows = con.execute(
+                "SELECT chat_ref, title, invite_url FROM force_join_channels "
+                "WHERE enabled=1 ORDER BY created_at ASC"
+            ).fetchall()
+        return rows
     finally:
         con.close()
-    # Legacy fallback keeps the current configured channel working.
-    return [{"chat_ref": required_channel_ref_legacy(), "title": required_channel_ref_legacy(), "invite_url": required_channel_url_legacy()}]
 
 def required_channel_ref_legacy():
     ref = _normalize_chat_ref(CHANNEL_ID)
