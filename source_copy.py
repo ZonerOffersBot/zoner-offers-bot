@@ -74,7 +74,7 @@ def _extract_posts(page):
     posts = []
     for node in soup.select(".tgme_widget_message"):
         data_post = node.get("data-post", "")
-        match = re.search(r"/(d+)$", data_post)
+        match = re.search(r"/(\\d+)$", data_post)
         if not match:
             continue
         message_id = match.group(1)
