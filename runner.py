@@ -48,7 +48,13 @@ async def managed_post_init(app):
 
     task = asyncio.create_task(bot.auto_scan_loop(app), name="zoner-auto-scan")
     app.bot_data["auto_scan_task"] = task
-    # Force-join diagnostics are informational only. They must never prevent\n    # the autonomous publisher from starting if a channel is temporarily unavailable.\n    try:\n        await bot.force_join_diagnostics(app.bot)\n    except Exception:\n        log.exception("⚠️ Force-join diagnostics failed; publisher remains active")\n    log.info("🤖 Autonomous deal scanner started (configured interval).")
+    # Force-join diagnostics are informational only. They must never prevent
+    # the autonomous publisher from starting if a channel is temporarily unavailable.
+    try:
+        await bot.force_join_diagnostics(app.bot)
+    except Exception:
+        log.exception("⚠️ Force-join diagnostics failed; publisher remains active")
+    log.info("🤖 Autonomous deal scanner started (configured interval).")
 
 
 async def managed_post_stop(app):
@@ -80,6 +86,9 @@ def build_app():
     )
 
     app.add_handler(ChatMemberHandler(bot.track_auto_publish_chat, ChatMemberHandler.MY_CHAT_MEMBER))
+    # Discover pre-existing groups when the bot receives any group message.
+    # This complements MY_CHAT_MEMBER, which only fires on membership changes.
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS, bot.track_group_message), group=1)
     
     conversation = ConversationHandler(
         entry_points=[
