@@ -1,4 +1,5 @@
 """Stable production entry point for Zoner Offers Bot."""
+# ZONER_REPUBLISH_UI_2026_10_06
 import bot
 import runner
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
