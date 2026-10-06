@@ -801,6 +801,51 @@ async def _button_handler_impl(update, context):
             return
         mark_user_verified(query.from_user.id)
 
+    if data.startswith("manual_publish:"):
+        if not is_admin(update):
+            await query.answer("Not authorized.", show_alert=True)
+            return
+        try:
+            _, offer_id_s, count_s = data.split(":", 2)
+            offer_id = int(offer_id_s)
+            count = max(1, min(int(count_s), 100))
+        except (ValueError, TypeError):
+            await query.edit_message_text("❌ Invalid publish request.", reply_markup=admin_menu())
+            return
+
+        row = get_offer(offer_id)
+        if not row:
+            await query.edit_message_text("❌ Offer no longer exists.", reply_markup=admin_menu())
+            return
+
+        await query.edit_message_text(
+            f"🚀 <b>Publishing started</b>\n\n"
+            f"📦 {html.escape(str(row['title']))}\n"
+            f"🔁 Requested: <b>{count}</b>\n"
+            "⏳ Please wait...",
+            parse_mode=ParseMode.HTML,
+        )
+
+        success = 0
+        for i in range(count):
+            try:
+                if await publish_offer(context.bot, row):
+                    success += 1
+            except Exception:
+                log.exception("Manual publish %s/%s failed for offer %s", i + 1, count, offer_id)
+            if i + 1 < count:
+                await asyncio.sleep(2)
+
+        await query.message.reply_text(
+            f"📢 <b>Manual publishing complete</b>\n\n"
+            f"🔁 Requested: <b>{count}</b>\n"
+            f"✅ Successful: <b>{success}</b>\n"
+            f"❌ Failed: <b>{count - success}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=admin_menu(),
+        )
+        return
+
     if data == "offers": await show_offers(update); return
     if data == "categories":
         await query.edit_message_text("🏷️ <b>Offer Categories</b>\n\nChoose a category:", parse_mode=ParseMode.HTML, reply_markup=categories_menu()); return
