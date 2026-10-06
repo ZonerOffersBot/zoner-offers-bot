@@ -169,6 +169,13 @@ def init_db():
         user_id INTEGER PRIMARY KEY,
         verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""")
+    con.execute("""CREATE TABLE IF NOT EXISTS auto_publish_chats (
+        chat_id INTEGER PRIMARY KEY,
+        title TEXT DEFAULT '',
+        chat_type TEXT DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
     # Migrate old databases created by the MVP.
     existing = {r["name"] for r in con.execute("PRAGMA table_info(offers)").fetchall()}
     for name, ddl in [
@@ -471,6 +478,19 @@ def join_gate_text():
         "Verification successful hone ke baad aapko dobara join gate nahi dikhega."
     )
 
+def get_auto_publish_chats_sync():
+    con = db()
+    try:
+        con.execute("""CREATE TABLE IF NOT EXISTS auto_publish_chats (
+            chat_id INTEGER PRIMARY KEY, title TEXT DEFAULT '', chat_type TEXT DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        return con.execute(
+            "SELECT chat_id FROM auto_publish_chats WHERE enabled=1 AND chat_type IN ('group','supergroup')"
+        ).fetchall()
+    finally:
+        con.close()
+
 def get_setting_sync(key, default=None):
     """Read an admin-configurable setting from the live bot database."""
     con = db()
@@ -555,6 +575,7 @@ def offer_markup(row, back="offers"):
 
 def admin_menu():
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Auto Group Publish", callback_data="admin_group_publish")],
         [InlineKeyboardButton("📢 Force Join Channels", callback_data="admin_force"),
          InlineKeyboardButton("📋 Menu Editor", callback_data="admin_menu")],
         [InlineKeyboardButton("⏰ Post Interval", callback_data="admin_interval"),
@@ -735,6 +756,29 @@ async def _button_handler_impl(update, context):
     if data.startswith("admin_"):
         if not is_admin(update):
             await query.answer("Not authorized.", show_alert=True); return
+        if data == "admin_group_publish":
+            enabled = str(get_setting_sync("auto_group_publish", "0")) == "1"
+            new_value = "0" if enabled else "1"
+            con = db()
+            try:
+                con.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+                con.execute(
+                    "INSERT INTO settings(key, value) VALUES('auto_group_publish', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (new_value,),
+                )
+                con.commit()
+            finally:
+                con.close()
+            chats = get_auto_publish_chats_sync()
+            state = "ON" if new_value == "1" else "OFF"
+            await query.edit_message_text(
+                f"📢 <b>Auto Group Publishing: {state}</b>\n\n"
+                "When ON, groups/supergroups where the bot is added are automatic publishing targets.\n"
+                f"Known active groups: <b>{len(chats)}</b>\n\n"
+                "The two configured offer channels continue publishing normally.",
+                parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+            return
         if data == "admin_force":
             await query.edit_message_text(
                 "📢 <b>Force Join Channels</b>\n\n"
@@ -1233,7 +1277,11 @@ async def publish_offer(bot, row):
     if AUTO_POST:
         # Publishing is the first priority. One channel failure never stops
         # the next channel or the scheduler.
-        for channel in POST_CHANNELS:
+        targets = list(POST_CHANNELS)
+        if str(get_setting_sync("auto_group_publish", "0")) == "1":
+            targets.extend(str(r["chat_id"]) for r in get_auto_publish_chats_sync())
+        targets = list(dict.fromkeys(targets))
+        for channel in targets:
             posted = False
             for attempt in range(3):
                 try:
