@@ -713,7 +713,7 @@ async def _button_handler_impl(update, context):
         await query.edit_message_text(
             "🤖 <b>AI Deal Hunter</b>\n\n"
             "Zoner checks multiple public deal sources automatically, detects discount signals, scores deal quality, filters duplicates and publishes only stronger candidates.\n\n"
-            f"⏱️ Auto deal scan: every {SCAN_SECONDS} seconds\n🎯 Minimum score: {MIN_DEAL_SCORE}/100",
+            f"⏱️ Auto publishing: every 15 minutes\n🎯 Minimum score: {MIN_DEAL_SCORE}/100",
             parse_mode=ParseMode.HTML, reply_markup=main_menu(query.from_user.id)); return
     if data.startswith("offer_"):
         try: offer_id = int(data[6:])
@@ -819,7 +819,7 @@ async def _button_handler_impl(update, context):
             await query.edit_message_text(
                 "📊 <b>Zoner AI Stats</b>\n\n"
                 f"🛍️ Offers: <b>{offer_count()}</b>\n🔔 Subscribers: <b>{subscriber_count()}</b>\n"
-                f"⏱️ Auto scan: <b>{SCAN_SECONDS} sec</b>\n🎯 Min score: <b>{MIN_DEAL_SCORE}</b>",
+                f"⏱️ Auto publishing: <b>15 minutes</b> (900 sec)\n🎯 Min score: <b>{MIN_DEAL_SCORE}</b>",
                 parse_mode=ParseMode.HTML, reply_markup=admin_menu()); return
         if data == "admin_panel":
             await query.edit_message_text("🔐 <b>AI Admin Panel</b>\n\nChoose an action:", parse_mode=ParseMode.HTML, reply_markup=admin_menu()); return
