@@ -7,6 +7,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
+    ChatMemberHandler,
     ConversationHandler,
     MessageHandler,
     filters,
@@ -78,6 +79,8 @@ def build_app():
         .build()
     )
 
+    app.add_handler(ChatMemberHandler(bot.track_auto_publish_chat, ChatMemberHandler.MY_CHAT_MEMBER))
+    
     conversation = ConversationHandler(
         entry_points=[
             CommandHandler("addoffer", bot.admin_start),
