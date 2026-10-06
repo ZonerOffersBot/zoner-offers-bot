@@ -17,22 +17,10 @@ log = logging.getLogger("zoner")
 
 
 async def polling_error_handler(update, context):
+    # Log polling/runtime exceptions only. Never inject unsolicited Telegram
+    # messages into the user's normal UI flow.
     exc = context.error
     log.error("Telegram runtime error: %r", exc, exc_info=exc)
-    try:
-        if update and update.callback_query:
-            try:
-                await update.callback_query.answer(
-                    "Temporary error — please try again.", show_alert=True
-                )
-            except Exception:
-                pass
-        elif update and update.effective_message:
-            await update.effective_message.reply_text(
-                "⚠️ Temporary error. The bot is still running — please try again."
-            )
-    except Exception:
-        log.exception("Could not send runtime-error recovery message")
 
 
 async def managed_post_init(app):
@@ -93,7 +81,7 @@ def build_app():
     # has explicitly opened the Add Channel screen.
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_force_join_admin_text),
-        group=0,
+        group=1,
     )
     
     conversation = ConversationHandler(
