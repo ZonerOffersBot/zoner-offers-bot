@@ -1154,7 +1154,9 @@ async def got_url(update, context):
         "Example: <b>100</b>",
         parse_mode=ParseMode.HTML,
     )
-    return C_COUNT\n\nasync def got_count(update, context):
+    return C_COUNT
+
+async def got_count(update, context):
     v = update.message.text.strip()
     try:
         count = int(v)
