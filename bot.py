@@ -491,6 +491,35 @@ def get_auto_publish_chats_sync():
     finally:
         con.close()
 
+async def track_auto_publish_chat(update, context):
+    """Register groups/supergroups the bot joins for optional auto publishing."""
+    member_update = getattr(update, "my_chat_member", None)
+    if not member_update:
+        return
+    chat = member_update.chat
+    if getattr(chat, "type", "") not in ("group", "supergroup"):
+        return
+    status = getattr(member_update.new_chat_member, "status", "")
+    con = db()
+    try:
+        con.execute("""CREATE TABLE IF NOT EXISTS auto_publish_chats (
+            chat_id INTEGER PRIMARY KEY, title TEXT DEFAULT '', chat_type TEXT DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        if status in ("left", "kicked"):
+            con.execute("UPDATE auto_publish_chats SET enabled=0, updated_at=CURRENT_TIMESTAMP WHERE chat_id=?", (chat.id,))
+        else:
+            con.execute(
+                """INSERT INTO auto_publish_chats(chat_id,title,chat_type,enabled,updated_at)
+                   VALUES(?,?,?,?,CURRENT_TIMESTAMP)
+                   ON CONFLICT(chat_id) DO UPDATE SET title=excluded.title,
+                   chat_type=excluded.chat_type, enabled=1, updated_at=CURRENT_TIMESTAMP""",
+                (chat.id, getattr(chat, "title", "") or "", chat.type, 1),
+            )
+        con.commit()
+    finally:
+        con.close()
+
 def get_setting_sync(key, default=None):
     """Read an admin-configurable setting from the live bot database."""
     con = db()
@@ -574,8 +603,9 @@ def offer_markup(row, back="offers"):
     ])
 
 def admin_menu():
+    group_state = "ON" if str(get_setting_sync("auto_group_publish", "0")) == "1" else "OFF"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Auto Group Publish", callback_data="admin_group_publish")],
+        [InlineKeyboardButton(f"📢 Auto Group Publish: {group_state}", callback_data="admin_group_publish")],
         [InlineKeyboardButton("📢 Force Join Channels", callback_data="admin_force"),
          InlineKeyboardButton("📋 Menu Editor", callback_data="admin_menu")],
         [InlineKeyboardButton("⏰ Post Interval", callback_data="admin_interval"),
