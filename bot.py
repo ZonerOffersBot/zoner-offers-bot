@@ -126,7 +126,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("zoner")
 
-C_TITLE, C_PRICE, C_OLD, C_CATEGORY, C_URL = range(5)
+C_TITLE, C_PRICE, C_OLD, C_CATEGORY, C_URL, C_COUNT = range(6)
 
 def db():
     con = sqlite3.connect(DB_FILE, timeout=30)
@@ -1016,7 +1016,7 @@ async def got_category(update, context):
     v = update.message.text.strip().lower()
     if v not in CATEGORIES: await update.message.reply_text("❌ Invalid category."); return C_CATEGORY
     context.user_data["category"] = v
-    await update.message.reply_text("5/5 Send product/deal URL:"); return C_URL
+    await update.message.reply_text("5/6 Send product/deal URL:"); return C_URL
 
 async def got_url(update, context):
     url = update.message.text.strip()
@@ -1025,10 +1025,13 @@ async def got_url(update, context):
         await update.message.reply_text("❌ Invalid URL. Send a full http(s) product/deal URL.")
         return C_URL
     d = context.user_data
-    offer_id = insert_offer(
-        d["title"], d["price"], d["old_price"], d["category"], url,
-        "Manual", 0, 100
+    d["url"] = url
+    await update.message.reply_text(
+        "6/6 Kitni baar publish karna hai? Number bhejo (1–100).\\n"
+        "Example: <b>100</b>",
+        parse_mode=ParseMode.HTML,
     )
+    return C_COUNT
     if not offer_id:
         await update.message.reply_text(
             "⚠️ This offer already exists (duplicate title + URL).\n"
@@ -1046,6 +1049,56 @@ async def got_url(update, context):
         reply_markup=offer_markup(row)
     )
     await publish_offer(context.bot, row)
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def got_count(update, context):
+    v = update.message.text.strip()
+    try:
+        count = int(v)
+        if count < 1 or count > 100:
+            raise ValueError
+    except (TypeError, ValueError):
+        await update.message.reply_text("❌ Publish count 1 se 100 ke beech rakho.")
+        return C_COUNT
+
+    d = context.user_data
+    offer_id = insert_offer(
+        d["title"], d["price"], d["old_price"], d["category"], d["url"],
+        "Manual", 0, 100
+    )
+    if not offer_id:
+        await update.message.reply_text("⚠️ This offer already exists (duplicate title + URL).")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    row = get_offer(offer_id)
+    if not row:
+        await update.message.reply_text("❌ Offer save hua but load nahi ho saka.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        f"✅ <b>Offer added.</b>\\n\\n"
+        f"🔁 Publish count: <b>{count}</b>\\n\\n" + offer_text(row),
+        parse_mode=ParseMode.HTML,
+        reply_markup=offer_markup(row)
+    )
+
+    success = 0
+    for i in range(count):
+        try:
+            if await publish_offer(context.bot, row):
+                success += 1
+        except Exception:
+            log.exception("Manual publish %s/%s failed for offer %s", i + 1, count, offer_id)
+        if i + 1 < count:
+            await asyncio.sleep(2)
+
+    await update.message.reply_text(
+        f"📢 Manual publishing complete: <b>{success}/{count}</b> successful.",
+        parse_mode=ParseMode.HTML,
+    )
     context.user_data.clear()
     return ConversationHandler.END
 
