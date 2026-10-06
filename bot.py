@@ -985,9 +985,13 @@ async def _button_handler_impl(update, context):
                 await asyncio.sleep(2)
         saved = record_manual_publish(offer_id, success) if success else False
         await query.message.reply_text(
-            f"📢 <b>Re-publishing complete</b>\\n\\n📦 {html.escape(str(row['title']))}\\n"
-            f"🔁 Requested: <b>{count}</b>\\n✅ Successful: <b>{success}</b>\\n"
-            f"❌ Failed: <b>{count-success}</b>",
+            "🟣 <b>𝗥𝗘-𝗣𝗨𝗕𝗟𝗜𝗦𝗛 𝗖𝗢𝗠𝗣𝗟𝗘𝗧𝗘</b>\\n"
+            "━━━━━━━━━━━━━━━━━━━━\\n"
+            f"📦 <b>{html.escape(str(row['title']))}</b>\\n"
+            f"🔁 Requested: <b>{count}</b>\\n"
+            f"✅ Successful: <b>{success}</b>\\n"
+            f"❌ Failed: <b>{count-success}</b>\\n"
+            f"💾 Vault saved: <b>{'YES' if saved else 'NO'}</b>",
             parse_mode=ParseMode.HTML, reply_markup=admin_menu())
         return
 
