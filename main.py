@@ -61,7 +61,6 @@ _original_button_impl = bot._button_handler_impl
 async def _patched_button_impl(update, context):
     data = update.callback_query.data
     if data == "published_links":
-        await update.callback_query.answer()
         user_id = update.callback_query.from_user.id
         if not bot.is_user_verified(user_id):
             verified = await bot.membership_status(context.bot, user_id)
@@ -79,7 +78,6 @@ async def _patched_button_impl(update, context):
         if not bot.is_admin(update):
             await update.callback_query.answer("Not authorized.", show_alert=True)
             return
-        await update.callback_query.answer()
         con = bot.db()
         try:
             user_count = con.execute("SELECT COUNT(*) AS n FROM subscribers WHERE enabled=1").fetchone()["n"]
