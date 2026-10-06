@@ -519,7 +519,7 @@ async def force_join_diagnostics(bot):
 def join_gate_markup():
     rows = []
     for idx, channel in enumerate(get_force_join_channels(), 1):
-        url = channel.get("invite_url") or ""
+        url = channel["invite_url"] or ""
         ref = channel["chat_ref"]
         if not url and ref.startswith("@"):
             url = "https://t.me/" + ref[1:]
