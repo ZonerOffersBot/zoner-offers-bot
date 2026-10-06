@@ -1804,15 +1804,44 @@ async def publish_offer(bot, row):
             if not posted:
                 log.error("❌ Could not publish deal %s to %s", row["id"], channel)
 
-    # Subscriber notifications are best-effort and can never block publishing.
+    # Subscriber notifications are strictly background/best-effort.
+    # NEVER await subscriber delivery here: a slow/blocked subscriber or
+    # Telegram rate-limit must not delay the 15-minute channel/group publisher.
     con = db()
-    users = con.execute("SELECT user_id FROM subscribers WHERE enabled=1").fetchall()
+    users = [row["user_id"] for row in con.execute(
+        "SELECT user_id FROM subscribers WHERE enabled=1"
+    ).fetchall()]
     con.close()
-    for user in users:
-        try:
-            await send_deal(user["user_id"])
-        except Exception as exc:
-            log.warning("Subscriber notification failed for %s: %s", user["user_id"], exc)
+
+    async def notify_subscribers():
+        # Bound concurrency so a large subscriber list cannot flood Telegram.
+        semaphore = asyncio.Semaphore(8)
+
+        async def notify_one(user_id):
+            async with semaphore:
+                try:
+                    await send_deal(user_id)
+                except Exception as exc:
+                    log.warning("Subscriber notification failed for %s: %s", user_id, exc)
+
+        if users:
+            await asyncio.gather(
+                *(notify_one(user_id) for user_id in users),
+                return_exceptions=True,
+            )
+
+    if users:
+        # Fire-and-forget with a top-level exception guard. The publishing
+        # cycle is considered complete as soon as configured channels/groups
+        # have been handled and their publication ledger entries are saved.
+        async def guarded_notify():
+            try:
+                await notify_subscribers()
+            except Exception:
+                log.exception("Background subscriber notification batch failed")
+
+        asyncio.create_task(guarded_notify())
+        log.info("📨 Queued %s subscriber notifications in background; publisher is not blocked", len(users))
 
     return channel_published
 
