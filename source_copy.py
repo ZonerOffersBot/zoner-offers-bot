@@ -249,7 +249,7 @@ def _format_post(post, source):
         lines.append(f"📉 Discount: {discount}")
     if link:
         lines.extend(["", "🛒 Buy Now", f"👉 {link}"])
-    lines.extend(["", "@offerleloturant"])
+    lines.extend(["", "@zoneroffers", "@offerleloturant"])
     return "\n".join(lines)[:4096]
 
 
