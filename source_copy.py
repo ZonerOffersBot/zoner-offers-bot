@@ -680,15 +680,30 @@ async def source_copy_loop(app):
                 # the same unclaimed link and each publish it.
                 if not _claim_post(bot, source, post["id"], link, post):
                     continue
-                if await _send_post(bot, app, post, source):
-                    offer_id = _save_published_offer(bot, post, source)
+                try:
+                    sent = await _send_post(bot, app, post, source)
+                except Exception:
+                    sent = False
+                    log.exception(
+                        "⚠️ Source post processing failed; skipping without stopping publisher: @%s/%s",
+                        _username(source), post["id"],
+                    )
+
+                if sent:
+                    try:
+                        offer_id = _save_published_offer(bot, post, source)
+                    except Exception:
+                        offer_id = None
+                        log.exception(
+                            "⚠️ Published post could not be saved; continuing publisher"
+                        )
                     log.info(
-                        "📥 Published + saved source post @%s/%s offer_id=%s",
+                        "📥 Published + permanently blocked source post @%s/%s offer_id=%s",
                         _username(source), post["id"], offer_id,
                     )
                 else:
                     log.warning(
-                        "⚠️ Source post send failed; claim kept permanently to prevent duplicate link: %s",
+                        "⏭️ Source post skipped after send/copy problem; publisher continues: %s",
                         _normalize_link(link),
                     )
         except asyncio.CancelledError:
