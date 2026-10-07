@@ -12,7 +12,6 @@ import logging
 import os
 import re
 import hashlib
-import hashlib
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
@@ -78,12 +77,6 @@ def _ensure_table(bot):
         con.execute("""
             CREATE TABLE IF NOT EXISTS source_copy_link_history (
                 product_link TEXT PRIMARY KEY,
-                copied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS source_copy_content_history (
-                content_key TEXT PRIMARY KEY,
                 copied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -183,11 +176,20 @@ def _already_copied(bot, source, message_id, product_link="", post=None):
         ).fetchone() is not None:
             return True
         normalized = _normalize_link(product_link)
-        if normalized and con.execute(
-            "SELECT 1 FROM source_copy_link_history WHERE product_link=? LIMIT 1",
-            (normalized,),
-        ).fetchone() is not None:
-            return True
+        if normalized:
+            if con.execute(
+                "SELECT 1 FROM source_copy_link_history WHERE product_link=? LIMIT 1",
+                (normalized,),
+            ).fetchone() is not None:
+                return True
+            # Also consult the durable publication ledger so links published
+            # before source_copy_link_history existed cannot be republished.
+            if con.execute(
+                "SELECT 1 FROM published_links "
+                "WHERE lower(rtrim(url, '/'))=? LIMIT 1",
+                (normalized,),
+            ).fetchone() is not None:
+                return True
         content_key = _content_key(post or {})
         if content_key and con.execute(
             "SELECT 1 FROM source_copy_content_history WHERE content_key=? LIMIT 1",
