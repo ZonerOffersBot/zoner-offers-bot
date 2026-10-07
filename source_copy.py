@@ -1,13 +1,18 @@
 """
-Fast public Telegram source copier.
+Public Telegram deal-source copier for Zoner Offers.
 
-Copies posts from configured public channels through their public web preview.
-The four default sources are scanned every 30 seconds. Posts up to 24 hours old
-are eligible, and each source/message is stored in SQLite to prevent duplicates.
-Private/invite links are ignored because they have no public preview.
+- Four public sources by default.
+- Scans every 30 seconds.
+- Publishes one new eligible post per 30-second cycle.
+- Includes posts from the previous 24 hours.
+- Prevents duplicate source posts with SQLite.
+- Converts source text into the Zoner Offers card format.
+- Downloads public preview images before uploading them to Telegram, avoiding
+  Telegram URL-fetch failures when possible.
 """
 import asyncio
 import html
+import io
 import logging
 import os
 import re
@@ -25,6 +30,7 @@ DEFAULT_SOURCES = [
     "https://t.me/Meesho9loot",
     "https://t.me/Lootunboxing",
 ]
+
 SOURCE_CHANNELS = [
     x.strip()
     for x in re.split(r"[,\n]+", os.getenv("SOURCE_CHANNELS", "").strip())
@@ -36,6 +42,17 @@ COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {
 }
 COPY_INTERVAL = 30
 BACKLOG_HOURS = 24
+
+URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
+PRICE_RE = re.compile(
+    r"(?:₹|rs\.?|inr)\s*[0-9][0-9,]*(?:\.\d{1,2})?",
+    re.IGNORECASE,
+)
+DISCOUNT_RE = re.compile(
+    r"\b[0-9]{1,3}\s*%\s*(?:off|discount)?\b|\bdiscount\s*[:\-]?\s*[^\n]+",
+    re.IGNORECASE,
+)
+BRAND_RE = re.compile(r"\bbrand\s*[:\-]\s*([^\n|]+)", re.IGNORECASE)
 
 
 def _username(source):
@@ -110,9 +127,8 @@ def _extract_posts(page):
             try:
                 published_at = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
             except ValueError:
-                published_at = None
+                pass
 
-        # If Telegram exposes a timestamp, enforce the 24-hour backlog window.
         if published_at is not None and published_at < cutoff:
             continue
 
@@ -121,9 +137,17 @@ def _extract_posts(page):
 
         media = []
         for photo in node.select(".tgme_widget_message_photo_wrap"):
-            m = re.search(r'url\([\'"]?([^\'")]+)', photo.get("style", ""))
-            if m:
-                media.append(urljoin("https://t.me/", html.unescape(m.group(1))))
+            match_media = re.search(
+                r'url\([\'"]?([^\'")]+)',
+                photo.get("style", ""),
+            )
+            if match_media:
+                media.append(
+                    urljoin(
+                        "https://t.me/",
+                        html.unescape(match_media.group(1)),
+                    )
+                )
 
         if not media:
             for img in node.select("img"):
@@ -137,17 +161,26 @@ def _extract_posts(page):
             "text": text,
             "media": media,
             "published_at": published_at,
+            "source": _username_from_node(node) or "",
         })
 
-    posts.sort(key=lambda p: p.get("published_at") or datetime.min.replace(tzinfo=timezone.utc))
+    posts.sort(
+        key=lambda p: p.get("published_at")
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
     return posts
+
+
+def _username_from_node(node):
+    data_post = node.get("data-post", "")
+    match = re.match(r"([^/]+)/\d+$", data_post)
+    return match.group(1) if match else ""
 
 
 def _fetch(source):
     url = _source_url(source)
     if not url:
         return []
-
     response = requests.get(
         url,
         headers={"User-Agent": "Mozilla/5.0 ZonerOffersBot public-channel-monitor/1.0"},
@@ -157,41 +190,170 @@ def _fetch(source):
     return _extract_posts(response.text)
 
 
+def _first_url(text):
+    match = URL_RE.search(text or "")
+    if not match:
+        return ""
+    return match.group(0).rstrip(").,>]")
+
+
+def _clean_line(line):
+    line = re.sub(r"https?://\S+", "", line)
+    line = re.sub(r"[\u200b\ufeff]", "", line)
+    return line.strip(" -–—|•\t")
+
+
+def _product_name(text):
+    for raw in (text or "").splitlines():
+        line = _clean_line(raw)
+        if not line:
+            continue
+        if PRICE_RE.search(line) or DISCOUNT_RE.search(line) or BRAND_RE.search(line):
+            continue
+        if len(line) >= 3:
+            return line[:180]
+    return "Latest Deal"
+
+
+def _brand(text):
+    match = BRAND_RE.search(text or "")
+    return match.group(1).strip()[:80] if match else ""
+
+
+def _price(text):
+    match = PRICE_RE.search(text or "")
+    return match.group(0).replace("  ", " ").strip() if match else ""
+
+
+def _discount(text):
+    match = DISCOUNT_RE.search(text or "")
+    return match.group(0).strip()[:100] if match else ""
+
+
+def _source_label(source):
+    username = _username(source)
+    labels = {
+        "WomenOfferUpdates": "Women Offer Updates",
+        "viratloot": "Virat Loot",
+        "Meesho9loot": "Meesho Loot",
+        "Lootunboxing": "Loot Unboxing",
+    }
+    return labels.get(username, username or "Telegram Source")
+
+
+def _format_post(post, source):
+    original = (post.get("text") or "").strip()
+    product = _product_name(original)
+    brand = _brand(original)
+    price = _price(original)
+    discount = _discount(original)
+    link = _first_url(original)
+
+    lines = [
+        "🔥 ZONER OFFERS",
+        "",
+        f"🛍️ Product Name: {product}",
+    ]
+
+    if brand:
+        lines.append(f"🏷️ Brand: {brand}")
+    if price:
+        lines.append(f"💰 Price: {price}")
+    if discount:
+        lines.append(f"📉 Discount: {discount}")
+
+    if link:
+        lines.extend(["", "🛒 Buy Now", f"👉 {link}"])
+
+    lines.extend([
+        "",
+        f"⚡ Source: {_source_label(source)}",
+    ])
+
+    # Keep the original source text available without inventing price/details.
+    details = original
+    if details and len(details) < 1800:
+        lines.extend(["", "📝 Details:", details])
+
+    formatted = "\n".join(lines).strip()
+    return formatted[:4096]
+
+
 def _destinations(bot):
     destinations = list(dict.fromkeys(bot.POST_CHANNELS))
-    con = bot.db()
     try:
-        rows = con.execute(
-            "SELECT chat_id FROM auto_publish_chats WHERE enabled=1"
-        ).fetchall()
+        con = bot.db()
+        try:
+            rows = con.execute(
+                "SELECT chat_id FROM auto_publish_chats WHERE enabled=1"
+            ).fetchall()
+        finally:
+            con.close()
         destinations.extend(str(row["chat_id"]) for row in rows)
-    finally:
-        con.close()
+    except Exception:
+        log.exception("Could not read auto-publish group registry")
     return list(dict.fromkeys(destinations))
 
 
-async def _send_post(bot, app, post):
+def _download_image(url):
+    if not url:
+        return None
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 ZonerOffersBot image-fetcher/1.0"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        if not response.content:
+            return None
+        image = io.BytesIO(response.content)
+        image.name = "source.jpg"
+        image.seek(0)
+        return image
+    except Exception as exc:
+        log.warning("Could not download source image: %s", exc)
+        return None
+
+
+def _chunks(text, limit=4096):
+    text = text or ""
+    return [text[i:i + limit] for i in range(0, len(text), limit)] or [""]
+
+
+async def _send_post(bot, app, post, source):
+    formatted = _format_post(post, source)
+    image_url = post.get("media", [""])[0] if post.get("media") else ""
+    image = await asyncio.to_thread(_download_image, image_url)
+
     sent_any = False
-    caption = post["text"][:1024] if post["text"] else "📢 New post from source channel"
 
     for target in _destinations(bot):
         try:
-            if post["media"]:
+            if image is not None:
+                image.seek(0)
+                caption = formatted[:1024]
                 await app.bot.send_photo(
                     chat_id=target,
-                    photo=post["media"][0],
+                    photo=image,
                     caption=caption,
                 )
+                remainder = formatted[1024:].strip()
+                if remainder:
+                    for chunk in _chunks(remainder):
+                        await app.bot.send_message(chat_id=target, text=chunk)
             else:
-                await app.bot.send_message(
-                    chat_id=target,
-                    text=caption[:4096],
-                )
+                for chunk in _chunks(formatted):
+                    await app.bot.send_message(chat_id=target, text=chunk)
+
             sent_any = True
         except Exception as exc:
             log.warning(
-                "Source-copy failed for post %s -> %s: %s",
-                post["id"], target, exc
+                "Source-copy failed for @%s/%s -> %s: %s",
+                _username(source),
+                post["id"],
+                target,
+                exc,
             )
 
     return sent_any
@@ -218,7 +380,7 @@ async def source_copy_loop(app):
         return
 
     log.info(
-        "📥 Source-copy started: %s | every %ss | backlog %sh",
+        "📥 Zoner source-copy started: %s | one post every %ss | backlog %sh",
         ", ".join("@" + _username(s) for s in active_sources),
         COPY_INTERVAL,
         BACKLOG_HOURS,
@@ -234,6 +396,7 @@ async def source_copy_loop(app):
                 return_exceptions=True,
             )
 
+            candidates = []
             for source, result in zip(active_sources, results):
                 if isinstance(result, Exception):
                     log.warning(
@@ -244,16 +407,24 @@ async def source_copy_loop(app):
                     continue
 
                 for post in result:
-                    if _already_copied(bot, source, post["id"]):
-                        continue
+                    if not _already_copied(bot, source, post["id"]):
+                        candidates.append((post.get("published_at"), source, post))
 
-                    if await _send_post(bot, app, post):
-                        _mark_copied(bot, source, post["id"])
-                        log.info(
-                            "📥 Copied @%s/%s",
-                            _username(source),
-                            post["id"],
-                        )
+            candidates.sort(
+                key=lambda item: item[0]
+                or datetime.min.replace(tzinfo=timezone.utc)
+            )
+
+            if candidates:
+                _, source, post = candidates[0]
+                if await _send_post(bot, app, post, source):
+                    _mark_copied(bot, source, post["id"])
+                    log.info(
+                        "📥 Published formatted source post @%s/%s",
+                        _username(source),
+                        post["id"],
+                    )
+
         except asyncio.CancelledError:
             raise
         except Exception:
