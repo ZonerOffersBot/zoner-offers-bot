@@ -13,7 +13,7 @@ import os
 import re
 import hashlib
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
 
 import requests
 from bs4 import BeautifulSoup
@@ -97,8 +97,29 @@ def _ensure_table(bot):
 
 
 def _normalize_link(link):
+    """Canonicalize shopping links so tracking/affiliate variants count as one."""
     value = (link or "").strip()
-    return value.rstrip("/").lower() if value else ""
+    if not value:
+        return ""
+    try:
+        parts = urlsplit(value)
+        tracking = {
+            "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+            "utm_id", "fbclid", "gclid", "msclkid", "ref", "ref_", "tag",
+            "linkcode", "creative", "creativeasin", "ascsubtag", "affid",
+        }
+        query = [
+            (k.lower(), v)
+            for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k.lower() not in tracking and not k.lower().startswith("utm_")
+        ]
+        query.sort()
+        return urlunsplit((
+            parts.scheme.lower(), parts.netloc.lower(),
+            parts.path.rstrip("/"), urlencode(query), ""
+        )).lower()
+    except Exception:
+        return value.rstrip("/").lower()
 
 
 def _save_published_offer(bot, post, source):
@@ -451,6 +472,11 @@ def _claim_post(bot, source, message_id, product_link="", post=None):
             ).fetchone() is not None:
                 con.rollback()
                 return False
+            # Block links already saved as offers, including older publications.
+            for row in con.execute("SELECT url FROM offers WHERE url IS NOT NULL").fetchall():
+                if _normalize_link(row["url"]) == normalized:
+                    con.rollback()
+                    return False
         if con.execute(
             "SELECT 1 FROM source_copy_history WHERE source_channel=? AND source_message_id=? LIMIT 1",
             (_username(source).lower(), str(message_id)),
