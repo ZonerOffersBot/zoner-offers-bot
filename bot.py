@@ -292,7 +292,16 @@ def get_offers(category=None, price_max=None, price_min=None, limit=20):
     con.close()
     return rows
 
-def get_offers_for_view(category=None, price_filter=None, limit=20):
+def get_offers_for_view(category=None, price_filter=None, limit=None):
+    # Retention/display caps requested for source + normal published offers:
+    # Latest = 20, each category = 25, each price range = 30.
+    if limit is None:
+        if price_filter:
+            limit = 30
+        elif category:
+            limit = 25
+        else:
+            limit = 20
     if not price_filter:
         return get_offers(category=category, limit=limit)
     low, high = price_filter
