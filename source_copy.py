@@ -220,10 +220,6 @@ def _format_post(post, source):
         lines.append(f"📉 Discount: {discount}")
     if link:
         lines.extend(["", "🛒 Buy Now", f"👉 {link}"])
-    lines.extend(["", f"⚡ Source: {_source_label(source)}"])
-
-    if original and len(original) < 1800:
-        lines.extend(["", "📝 Details:", original])
     return "\n".join(lines)[:4096]
 
 
