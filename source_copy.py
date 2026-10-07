@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import hashlib
+import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
 
@@ -42,6 +43,8 @@ COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {
 }
 COPY_INTERVAL = 300
 BACKLOG_HOURS = 48
+RUNTIME_LOCK_LEASE_SECONDS = 600
+RUNTIME_LOCK_OWNER = uuid.uuid4().hex
 
 URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 PRICE_RE = re.compile(r"(?:₹|rs\.?|inr)\s*[0-9][0-9,]*(?:\.\d{1,2})?", re.I)
@@ -100,11 +103,57 @@ def _ensure_table(bot):
                 claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS source_copy_runtime_lock (
+                lock_name TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                heartbeat REAL NOT NULL
+            )
+        """)
         columns = {
             row[1] for row in con.execute("PRAGMA table_info(source_copy_history)").fetchall()
         }
         if "product_link" not in columns:
             con.execute("ALTER TABLE source_copy_history ADD COLUMN product_link TEXT DEFAULT ''")
+        con.commit()
+    finally:
+        con.close()
+
+
+def _acquire_runtime_lock(bot):
+    con = bot.db()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        now = datetime.now(timezone.utc).timestamp()
+        row = con.execute(
+            "SELECT owner, heartbeat FROM source_copy_runtime_lock WHERE lock_name='publisher'"
+        ).fetchone()
+        if row and row["owner"] != RUNTIME_LOCK_OWNER and now - float(row["heartbeat"]) < RUNTIME_LOCK_LEASE_SECONDS:
+            con.rollback()
+            return False
+        con.execute(
+            """INSERT INTO source_copy_runtime_lock(lock_name, owner, heartbeat)
+               VALUES('publisher', ?, ?)
+               ON CONFLICT(lock_name) DO UPDATE SET owner=excluded.owner, heartbeat=excluded.heartbeat""",
+            (RUNTIME_LOCK_OWNER, now),
+        )
+        con.commit()
+        return True
+    except Exception:
+        con.rollback()
+        log.exception("Could not acquire source-copy singleton lock")
+        return False
+    finally:
+        con.close()
+
+
+def _release_runtime_lock(bot):
+    con = bot.db()
+    try:
+        con.execute(
+            "DELETE FROM source_copy_runtime_lock WHERE lock_name='publisher' AND owner=?",
+            (RUNTIME_LOCK_OWNER,),
+        )
         con.commit()
     finally:
         con.close()
@@ -623,6 +672,10 @@ async def source_copy_loop(app):
 
     bot = __import__("bot")
     _ensure_table(bot)
+
+    if not _acquire_runtime_lock(bot):
+        log.error("🛑 DUPLICATE-PROCESS BLOCK: another source-copy publisher is already running; this instance will not publish.")
+        return
 
     active_sources = [s for s in SOURCE_CHANNELS if _username(s)]
     for source in SOURCE_CHANNELS:
