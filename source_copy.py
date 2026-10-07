@@ -94,6 +94,66 @@ def _normalize_link(link):
     return value.rstrip("/").lower() if value else ""
 
 
+def _save_published_offer(bot, post, source):
+    """Save a successfully published source post into the bot's normal offer store."""
+    original = (post.get("text") or "").strip()
+    link = _first_url(original)
+    if not link:
+        return None
+
+    title = _product_name(original)
+    price = _price(original)
+    price_value = re.sub(r"[^0-9.]", "", price) if price else ""
+    if not price_value:
+        price_value = "Check live price"
+
+    brand = _brand(original)
+    discount_text = _discount(original)
+    discount_match = re.search(r"(\d{1,3})\s*%", discount_text or "")
+    discount = min(int(discount_match.group(1)), 100) if discount_match else 0
+    category = bot.guess_category(" ".join([title, original, brand, _username(source)]))
+    source_name = _username(source) or "Telegram"
+    image_url = (post.get("media") or [""])[0]
+    fingerprint = bot.fingerprint(title, link)
+
+    con = bot.db()
+    try:
+        existing = con.execute(
+            "SELECT id FROM offers WHERE fingerprint=? OR url=? LIMIT 1",
+            (fingerprint, link),
+        ).fetchone()
+        if existing:
+            offer_id = existing["id"]
+            con.execute(
+                "UPDATE offers SET title=?, price=?, category=?, source=?, discount=?, "
+                "image_url=?, description=?, url=? WHERE id=?",
+                (title, price_value, category, source_name, discount, image_url,
+                 original[:1000], link, offer_id),
+            )
+        else:
+            score = bot.score_deal(title, discount, source_name)
+            cur = con.execute(
+                "INSERT INTO offers(title,price,old_price,category,url,source,discount,score,"
+                "fingerprint,image_url,description) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (title, price_value, "", category, link, source_name, discount, score,
+                 fingerprint, image_url, original[:1000]),
+            )
+            offer_id = cur.lastrowid
+
+        con.execute(
+            "INSERT INTO publish_history(offer_id,published_at) VALUES(?,CURRENT_TIMESTAMP)",
+            (offer_id,),
+        )
+        con.commit()
+        return offer_id
+    except Exception:
+        con.rollback()
+        log.exception("Could not save source-copy offer into Latest Offers")
+        return None
+    finally:
+        con.close()
+
+
 def _already_copied(bot, source, message_id, product_link=""):
     con = bot.db()
     try:
@@ -397,8 +457,12 @@ async def source_copy_loop(app):
             if candidates:
                 _, source, post, link = candidates[0]
                 if await _send_post(bot, app, post, source):
+                    offer_id = _save_published_offer(bot, post, source)
                     _mark_copied(bot, source, post["id"], link)
-                    log.info("📥 Published formatted source post @%s/%s", _username(source), post["id"])
+                    log.info(
+                        "📥 Published + saved source post @%s/%s offer_id=%s",
+                        _username(source), post["id"], offer_id,
+                    )
         except asyncio.CancelledError:
             raise
         except Exception:
