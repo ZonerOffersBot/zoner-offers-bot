@@ -1,7 +1,7 @@
 """
 Public Telegram deal-source copier for Zoner Offers.
 
-Four public sources, one formatted post every 30 seconds, 24-hour backlog,
+Four public sources, one formatted post every 5 minutes, 48-hour backlog,
 duplicate protection, image upload with text fallback, and destination
 permission diagnostics.
 """
@@ -35,8 +35,8 @@ SOURCE_CHANNELS = [
 COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {
     "0", "false", "off", "no"
 }
-COPY_INTERVAL = 30
-BACKLOG_HOURS = 24
+COPY_INTERVAL = 300
+BACKLOG_HOURS = 48
 
 URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 PRICE_RE = re.compile(r"(?:₹|rs\.?|inr)\s*[0-9][0-9,]*(?:\.\d{1,2})?", re.I)
