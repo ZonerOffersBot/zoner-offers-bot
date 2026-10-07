@@ -497,27 +497,11 @@ def _claim_post(bot, source, message_id, product_link="", post=None):
 
 
 def _release_claim(bot, source, message_id, product_link="", post=None):
-    con = bot.db()
-    try:
-        con.execute(
-            "DELETE FROM source_copy_history WHERE source_channel=? AND source_message_id=?",
-            (_username(source).lower(), str(message_id)),
-        )
-        normalized = _normalize_link(product_link)
-        if normalized:
-            con.execute(
-                "DELETE FROM source_copy_link_history WHERE product_link=?",
-                (normalized,),
-            )
-        key = _content_key(post or {})
-        if key:
-            con.execute(
-                "DELETE FROM source_copy_content_history WHERE content_key=?",
-                (key,),
-            )
-        con.commit()
-    finally:
-        con.close()
+    # Never release a link claim. Telegram can partially succeed (one destination
+    # succeeds while another fails), and releasing here would allow the next cycle
+    # to publish the exact same link again. Duplicate prevention is higher priority
+    # than retrying a failed source post.
+    return
 
 
 async def _send_post(bot, app, post, source):
@@ -616,7 +600,10 @@ async def source_copy_loop(app):
                         _username(source), post["id"], offer_id,
                     )
                 else:
-                    _release_claim(bot, source, post["id"], link, post)
+                    log.warning(
+                        "⚠️ Source post send failed; claim kept permanently to prevent duplicate link: %s",
+                        _normalize_link(link),
+                    )
         except asyncio.CancelledError:
             raise
         except Exception:
