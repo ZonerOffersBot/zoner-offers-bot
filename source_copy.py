@@ -110,6 +110,45 @@ def _normalize_link(link):
     value = (link or "").strip()
     return value.rstrip("/").lower() if value else ""
 
+def _public_channel_has_link(target, product_link):
+    """Check the public Telegram preview for a link already published in a destination.
+
+    This is an extra cross-process/restart safety net. SQLite history can be lost
+    when a Render instance is restarted without persistent storage, but the public
+    destination channel itself is the durable publication record.
+    """
+    normalized = _normalize_link(product_link)
+    target = str(target or "").strip()
+    if not normalized or not target.startswith("@"):
+        return False
+
+    username = target.lstrip("@").split("/", 1)[0]
+    if not re.fullmatch(r"[A-Za-z0-9_]{3,64}", username):
+        return False
+
+    try:
+        response = requests.get(
+            f"https://t.me/s/{username}",
+            headers={"User-Agent": "Mozilla/5.0 ZonerOffersBot duplicate-check/1.0"},
+            timeout=12,
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        for node in soup.select(".tgme_widget_message"):
+            text = node.get_text(" ", strip=True)
+            for raw in URL_RE.findall(text):
+                if _normalize_link(raw.rstrip(").,>]]")) == normalized:
+                    return True
+            for anchor in node.select("a[href]"):
+                href = html.unescape(anchor.get("href", "")).strip()
+                if _normalize_link(href) == normalized:
+                    return True
+        return False
+    except Exception as exc:
+        log.warning("Public destination duplicate check failed target=%s: %s", target, exc)
+        return False
+
+
 
 def _save_published_offer(bot, post, source):
     """Save a successfully published source post into the bot's normal offer store."""
@@ -621,6 +660,21 @@ async def source_copy_loop(app):
 
             if candidates:
                 _, source, post, link = candidates[0]
+
+                # Telegram itself is the final durable publication ledger for the
+                # public Zoner channel. This catches links published by an older
+                # deployment/process whose SQLite history is missing or reset.
+                already_on_zoner = await asyncio.to_thread(
+                    _public_channel_has_link, "@zoneroffers", link
+                )
+                if already_on_zoner:
+                    log.warning(
+                        "🚫 CHANNEL PRE-PUBLISH BLOCK: exact link already exists in @zoneroffers: %s",
+                        _normalize_link(link),
+                    )
+                    _mark_copied(bot, source, post["id"], link, post)
+                    continue
+
                 # Claim atomically BEFORE Telegram send. This is critical:
                 # multiple source-copy tasks/processes can otherwise all observe
                 # the same unclaimed link and each publish it.
