@@ -366,42 +366,67 @@ def _chunks(text, limit=4096):
     return [text[i:i + limit] for i in range(0, len(text or ""), limit)] or [""]
 
 
+async def _send_one_destination(app, target, formatted, image):
+    """Publish one source post to one destination; runs independently of others."""
+    try:
+        if image is not None:
+            image.seek(0)
+            try:
+                await app.bot.send_photo(
+                    chat_id=target,
+                    photo=image,
+                    caption=formatted[:1024],
+                )
+                remainder = formatted[1024:].strip()
+                if remainder:
+                    for chunk in _chunks(remainder):
+                        await app.bot.send_message(chat_id=target, text=chunk)
+            except Exception as photo_exc:
+                log.warning(
+                    "Photo publish failed -> %s; falling back to formatted text: %s",
+                    target, photo_exc,
+                )
+                for chunk in _chunks(formatted):
+                    await app.bot.send_message(chat_id=target, text=chunk)
+        else:
+            for chunk in _chunks(formatted):
+                await app.bot.send_message(chat_id=target, text=chunk)
+        return True
+    except Exception as exc:
+        log.warning("Source-copy destination failed -> %s: %s", target, exc)
+        return False
+
+
 async def _send_post(bot, app, post, source):
     formatted = _format_post(post, source)
     image_url = post.get("media", [""])[0] if post.get("media") else ""
     image = await asyncio.to_thread(_download_image, image_url)
+    targets = _destinations(bot)
+
+    if not targets:
+        return False
+
+    # Start every destination at once so a slow/failing chat does not block the others.
+    results = await asyncio.gather(
+        *(
+            _send_one_destination(app, target, formatted, image)
+            for target in targets
+        ),
+        return_exceptions=True,
+    )
+
     sent_any = False
-
-    for target in _destinations(bot):
-        try:
-            if image is not None:
-                image.seek(0)
-                try:
-                    await app.bot.send_photo(
-                        chat_id=target,
-                        photo=image,
-                        caption=formatted[:1024],
-                    )
-                    remainder = formatted[1024:].strip()
-                    if remainder:
-                        for chunk in _chunks(remainder):
-                            await app.bot.send_message(chat_id=target, text=chunk)
-                except Exception as photo_exc:
-                    log.warning(
-                        "Photo publish failed for %s -> %s; falling back to formatted text: %s",
-                        post["id"], target, photo_exc,
-                    )
-                    for chunk in _chunks(formatted):
-                        await app.bot.send_message(chat_id=target, text=chunk)
-            else:
-                for chunk in _chunks(formatted):
-                    await app.bot.send_message(chat_id=target, text=chunk)
-
+    for target, result in zip(targets, results):
+        if result is True:
             sent_any = True
-        except Exception as exc:
+            log.info(
+                "Source-copy published @%s/%s -> %s",
+                _username(source), post["id"], target,
+            )
+        elif isinstance(result, Exception):
             log.warning(
-                "Source-copy failed for @%s/%s -> %s: %s",
-                _username(source), post["id"], target, exc,
+                "Source-copy unexpected destination error @%s/%s -> %s: %s",
+                _username(source), post["id"], target, result,
             )
 
     return sent_any
