@@ -329,25 +329,75 @@ def fingerprint(title, url):
     return hashlib.sha256((re.sub(r"\W+", " ", title.lower()).strip() + "|" + url.split("?")[0]).encode()).hexdigest()
 
 def guess_category(text):
-    """Assign every discovered link to the most relevant product category."""
-    t = text.lower()
-    if any(x in t for x in ["ps5", "ps4", "xbox", "gaming", "gpu", "rtx", "controller", "steam", "nintendo"]):
-        return "gaming"
-    if any(x in t for x in ["shirt", "jeans", "shoe", "sneaker", "dress", "fashion", "myntra", "ajio", "saree", "kurti", "jacket"]):
-        return "fashion"
-    if any(x in t for x in ["sofa", "mixer", "fridge", "refrigerator", "washing", "kitchen", "chair", "home", "cookware", "furniture"]):
-        return "home"
-    if any(x in t for x in ["book", "novel", "kindle", "textbook", "comics"]):
-        return "books"
-    if any(x in t for x in ["grocery", "groceries", "food", "blinkit", "bigbasket", "zepto", "instamart", "snacks", "rice", "atta", "oil"]):
-        return "grocery"
-    if any(x in t for x in ["beauty", "makeup", "cosmetic", "skincare", "skin care", "shampoo", "nykaa", "perfume", "fragrance"]):
-        return "beauty"
-    if any(x in t for x in ["sports", "fitness", "gym", "decathlon", "cricket", "football", "badminton", "running", "yoga", "dumbbell"]):
-        return "sports"
-    if any(x in t for x in ["kids", "baby", "toys", "toy", "firstcry", "diaper", "stroller", "children"]):
-        return "kids"
-    return "electronics"
+    """Classify the actual product, not the retailer/source channel.
+    Uses broad product vocabulary so marketplace posts do not fall back to
+    Electronics merely because the source is generic (for example Meesho).
+    """
+    t = (text or "").lower()
+
+    category_terms = {
+        "gaming": [
+            "ps5", "ps4", "xbox", "gaming", "gpu", "rtx", "controller",
+            "steam", "nintendo", "playstation", "joystick", "gamepad",
+        ],
+        "fashion": [
+            "shirt", "t-shirt", "tshirt", "tee", "jeans", "trouser", "pant",
+            "pants", "shorts", "shoe", "shoes", "sneaker", "sneakers",
+            "sandals", "slipper", "dress", "top", "kurta", "kurti", "saree",
+            "sari", "lehenga", "salwar", "dupatta", "jacket", "hoodie",
+            "sweatshirt", "blazer", "coat", "skirt", "legging", "leggings",
+            "innerwear", "bra", "brief", "boxer", "nightwear", "trackpant",
+            "track pants", "clothing", "apparel", "wear", "fashion",
+            "men's", "mens", "women's", "womens", "boys", "girls",
+            "जूते", "कपड़े", "कपड़ा", "शर्ट", "कुर्ती", "साड़ी", "जींस",
+        ],
+        "electronics": [
+            "mobile", "phone", "smartphone", "iphone", "android", "laptop",
+            "tablet", "computer", "monitor", "keyboard", "mouse", "printer",
+            "earbuds", "earbud", "headphone", "headset", "speaker", "soundbar",
+            "charger", "power bank", "powerbank", "cable", "adapter",
+            "smartwatch", "smart watch", "watch", "television", "tv",
+            "camera", "projector", "router", "wifi", "ssd", "hard disk",
+            "pendrive", "usb", "led", "airpods", "electronic",
+        ],
+        "home": [
+            "sofa", "mixer", "grinder", "fridge", "refrigerator", "washing",
+            "washing machine", "kitchen", "chair", "table", "bed", "mattress",
+            "cookware", "furniture", "curtain", "bedsheet", "blanket",
+            "pillow", "home decor", "decor", "utensil", "bottle",
+        ],
+        "books": ["book", "novel", "kindle", "textbook", "comics", "magazine"],
+        "grocery": [
+            "grocery", "groceries", "food", "blinkit", "bigbasket", "zepto",
+            "instamart", "snacks", "rice", "atta", "flour", "oil", "dal",
+            "masala", "biscuit", "chocolate", "beverage",
+        ],
+        "beauty": [
+            "beauty", "makeup", "cosmetic", "skincare", "skin care", "shampoo",
+            "conditioner", "nykaa", "perfume", "fragrance", "lipstick",
+            "serum", "moisturizer", "sunscreen", "face wash",
+        ],
+        "sports": [
+            "sports", "fitness", "gym", "decathlon", "cricket", "football",
+            "badminton", "running", "yoga", "dumbbell", "treadmill",
+            "sportswear", "football", "bat", "racket",
+        ],
+        "kids": [
+            "kids", "baby", "toys", "toy", "firstcry", "diaper", "stroller",
+            "children", "school bag", "baby care",
+        ],
+    }
+
+    # Score matches instead of returning on the first keyword. This prevents
+    # generic words such as "watch" or "offer" from forcing the wrong category.
+    scores = {category: 0 for category in category_terms}
+    for category, terms in category_terms.items():
+        for term in terms:
+            if term in t:
+                scores[category] += 1
+
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "electronics"
 
 def extract_price(text):
     m = re.search(r"(?:₹|Rs\.?\s*)([0-9][0-9,]*(?:\.\d+)?)", text, re.I)
