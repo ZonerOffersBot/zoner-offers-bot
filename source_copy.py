@@ -20,6 +20,11 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger("zoner")
 
+# One publisher critical section per running process. The duplicate gate and
+# Telegram send must happen in the same serialized section so two concurrent
+# source-copy workers cannot both pass the public-channel check and then send.
+PUBLICATION_LOCK = asyncio.Lock()
+
 DEFAULT_SOURCES = [
     "https://t.me/WomenOfferUpdates",
     "https://t.me/viratloot",
@@ -661,33 +666,48 @@ async def source_copy_loop(app):
             if candidates:
                 _, source, post, link = candidates[0]
 
-                # Telegram itself is the final durable publication ledger for the
-                # public Zoner channel. This catches links published by an older
-                # deployment/process whose SQLite history is missing or reset.
-                already_on_zoner = await asyncio.to_thread(
-                    _public_channel_has_link, "@zoneroffers", link
-                )
-                if already_on_zoner:
-                    log.warning(
-                        "🚫 CHANNEL PRE-PUBLISH BLOCK: exact link already exists in @zoneroffers: %s",
-                        _normalize_link(link),
+                # The duplicate check, atomic claim, and Telegram send are
+                # serialized inside one process. This closes the race where two
+                # source-copy workers both check the public channel before either
+                # message becomes visible there.
+                async with PUBLICATION_LOCK:
+                    # Telegram itself is the final durable publication ledger for
+                    # the public Zoner channel. This catches links published by an
+                    # older deployment/process whose SQLite history is missing/reset.
+                    already_on_zoner = await asyncio.to_thread(
+                        _public_channel_has_link, "@zoneroffers", link
                     )
-                    _mark_copied(bot, source, post["id"], link, post)
-                    continue
+                    if already_on_zoner:
+                        log.warning(
+                            "🚫 CHANNEL PRE-PUBLISH BLOCK: exact link already exists in @zoneroffers: %s",
+                            _normalize_link(link),
+                        )
+                        _mark_copied(bot, source, post["id"], link, post)
+                        continue
 
-                # Claim atomically BEFORE Telegram send. This is critical:
-                # multiple source-copy tasks/processes can otherwise all observe
-                # the same unclaimed link and each publish it.
-                if not _claim_post(bot, source, post["id"], link, post):
-                    continue
-                try:
-                    sent = await _send_post(bot, app, post, source)
-                except Exception:
-                    sent = False
-                    log.exception(
-                        "⚠️ Source post processing failed; skipping without stopping publisher: @%s/%s",
-                        _username(source), post["id"],
-                    )
+                    # Re-check the local durable guard after entering the lock.
+                    # Another worker may have claimed the candidate while this
+                    # worker was building the candidate list.
+                    if _already_copied(bot, source, post["id"], link, post):
+                        log.warning(
+                            "🚫 LOCKED PRE-PUBLISH BLOCK: exact link already recorded: %s",
+                            _normalize_link(link),
+                        )
+                        continue
+
+                    # Claim immediately before Telegram send. Never release the
+                    # claim on failure: a partial Telegram send must not be retried
+                    # as a duplicate link.
+                    if not _claim_post(bot, source, post["id"], link, post):
+                        continue
+                    try:
+                        sent = await _send_post(bot, app, post, source)
+                    except Exception:
+                        sent = False
+                        log.exception(
+                            "⚠️ Source post processing failed; skipping without stopping publisher: @%s/%s",
+                            _username(source), post["id"],
+                        )
 
                 if sent:
                     try:
