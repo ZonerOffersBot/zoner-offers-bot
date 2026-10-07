@@ -11,6 +11,7 @@ import io
 import logging
 import os
 import re
+import hashlib
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
@@ -76,6 +77,12 @@ def _ensure_table(bot):
         con.execute("""
             CREATE TABLE IF NOT EXISTS source_copy_link_history (
                 product_link TEXT PRIMARY KEY,
+                copied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS source_copy_content_history (
+                content_key TEXT PRIMARY KEY,
                 copied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -154,7 +161,13 @@ def _save_published_offer(bot, post, source):
         con.close()
 
 
-def _already_copied(bot, source, message_id, product_link=""):
+def _content_key(post):
+    text = (post.get("text") or "").strip().lower()
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
+
+def _already_copied(bot, source, message_id, product_link="", post=None):
     con = bot.db()
     try:
         if con.execute(
@@ -168,12 +181,18 @@ def _already_copied(bot, source, message_id, product_link=""):
             (normalized,),
         ).fetchone() is not None:
             return True
+        content_key = _content_key(post or {})
+        if content_key and con.execute(
+            "SELECT 1 FROM source_copy_content_history WHERE content_key=? LIMIT 1",
+            (content_key,),
+        ).fetchone() is not None:
+            return True
         return False
     finally:
         con.close()
 
 
-def _mark_copied(bot, source, message_id, product_link=""):
+def _mark_copied(bot, source, message_id, product_link="", post=None):
     con = bot.db()
     try:
         normalized = _normalize_link(product_link)
@@ -185,6 +204,12 @@ def _mark_copied(bot, source, message_id, product_link=""):
             con.execute(
                 "INSERT OR IGNORE INTO source_copy_link_history(product_link) VALUES(?)",
                 (normalized,),
+            )
+        content_key = _content_key(post or {})
+        if content_key:
+            con.execute(
+                "INSERT OR IGNORE INTO source_copy_content_history(content_key) VALUES(?)",
+                (content_key,),
             )
         con.commit()
     finally:
@@ -472,7 +497,7 @@ async def source_copy_loop(app):
                     continue
                 for post in result:
                     link = _first_url(post.get("text") or "")
-                    if not _already_copied(bot, source, post["id"], link):
+                    if link and not _already_copied(bot, source, post["id"], link, post):
                         candidates.append((post.get("published_at"), source, post, link))
 
             candidates.sort(
@@ -483,7 +508,7 @@ async def source_copy_loop(app):
                 _, source, post, link = candidates[0]
                 if await _send_post(bot, app, post, source):
                     offer_id = _save_published_offer(bot, post, source)
-                    _mark_copied(bot, source, post["id"], link)
+                    _mark_copied(bot, source, post["id"], link, post)
                     log.info(
                         "📥 Published + saved source post @%s/%s offer_id=%s",
                         _username(source), post["id"], offer_id,
