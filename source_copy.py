@@ -1,17 +1,15 @@
 """
 Public Telegram channel copier.
 
-Reads the public preview of a channel (t.me/s/<username>) without requiring
-admin access to the source channel, then republishes new posts through the
-existing bot. It stores source message IDs so a restart does not duplicate
-posts.
+Copies recent posts from configured PUBLIC Telegram channels using their public
+web previews. Private/invite-only links are skipped. Source-copy polling is
+independent of the normal 15-minute deal scanner.
 """
 import asyncio
 import html
 import logging
 import os
 import re
-import sqlite3
 from urllib.parse import urljoin
 
 import requests
@@ -19,19 +17,54 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger("zoner")
 
-SOURCE_CHANNEL = os.getenv("SOURCE_CHANNEL", "@Flipkartdj").strip()
-COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
-COPY_INTERVAL = 30
+DEFAULT_SOURCES = [
+    "https://t.me/Flipkartdj",
+    "https://t.me/WomenOfferUpdates",
+    "https://t.me/viratloot",
+    "https://t.me/Meesho9loot",
+    "https://t.me/Lootunboxing",
+]
 
-def _username():
-    value = SOURCE_CHANNEL.strip()
-    if value.startswith("https://t.me/") or value.startswith("http://t.me/"):
+# Optional comma/newline separated SOURCE_CHANNELS env var.
+_raw_sources = os.getenv("SOURCE_CHANNELS", "").strip()
+if _raw_sources:
+    SOURCE_CHANNELS = [
+        x.strip() for x in re.split(r"[,
+]+", _raw_sources) if x.strip()
+    ]
+else:
+    SOURCE_CHANNELS = DEFAULT_SOURCES
+
+# Keep old single-source env var compatible, but never add private invite links.
+legacy = os.getenv("SOURCE_CHANNEL", "").strip()
+if legacy and legacy not in SOURCE_CHANNELS:
+    SOURCE_CHANNELS.insert(0, legacy)
+
+COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {
+    "0", "false", "off", "no"
+}
+# Fast source polling; this does NOT change the normal 15-minute deal scanner.
+COPY_INTERVAL = max(5, int(os.getenv("SOURCE_COPY_INTERVAL", "10")))
+
+
+def _username(source):
+    value = (source or "").strip()
+    if value.startswith(("https://t.me/", "http://t.me/")):
         value = value.rstrip("/").split("/")[-1]
     value = value.lstrip("@").split("?")[0]
+    # Invite/private links such as t.me/+AbCd... cannot be read through
+    # Telegram's public channel preview.
+    if not value or value.startswith("+"):
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9_]{3,64}", value):
+        return ""
     return value
 
-def _source_url():
-    return f"https://t.me/s/{_username()}"
+
+def _source_url(source):
+    username = _username(source)
+    return f"https://t.me/s/{username}" if username else ""
+
 
 def _ensure_table(bot):
     con = bot.db()
@@ -48,26 +81,31 @@ def _ensure_table(bot):
     finally:
         con.close()
 
-def _already_copied(bot, message_id):
+
+def _already_copied(bot, source, message_id):
     con = bot.db()
     try:
         return con.execute(
-            "SELECT 1 FROM source_copy_history WHERE source_channel=? AND source_message_id=? LIMIT 1",
-            (_username().lower(), str(message_id)),
+            """SELECT 1 FROM source_copy_history
+               WHERE source_channel=? AND source_message_id=? LIMIT 1""",
+            (_username(source).lower(), str(message_id)),
         ).fetchone() is not None
     finally:
         con.close()
 
-def _mark_copied(bot, message_id):
+
+def _mark_copied(bot, source, message_id):
     con = bot.db()
     try:
         con.execute(
-            "INSERT OR IGNORE INTO source_copy_history(source_channel, source_message_id) VALUES(?,?)",
-            (_username().lower(), str(message_id)),
+            """INSERT OR IGNORE INTO source_copy_history
+               (source_channel, source_message_id) VALUES(?,?)""",
+            (_username(source).lower(), str(message_id)),
         )
         con.commit()
     finally:
         con.close()
+
 
 def _extract_posts(page):
     soup = BeautifulSoup(page, "html.parser")
@@ -77,21 +115,18 @@ def _extract_posts(page):
         match = re.search(r"/(\d+)$", data_post)
         if not match:
             continue
-        message_id = match.group(1)
 
+        message_id = match.group(1)
         text_node = node.select_one(".tgme_widget_message_text")
         text = text_node.get_text("\n", strip=True) if text_node else ""
 
-        # Telegram's public preview exposes media as background images on
-        # tgme_widget_message_photo_wrap. Use the absolute URL as send_photo input.
         media = []
         for photo in node.select(".tgme_widget_message_photo_wrap"):
             style = photo.get("style", "")
             m = re.search(r'url\([\'"]?([^\'")]+)', style)
             if m:
                 media.append(urljoin("https://t.me/", html.unescape(m.group(1))))
-        # Video previews can expose a direct thumbnail. Sending the thumbnail
-        # is safer than attempting to download arbitrary media from the source.
+
         if not media:
             for img in node.select("img"):
                 src = img.get("src")
@@ -100,24 +135,34 @@ def _extract_posts(page):
                     break
 
         posts.append({"id": message_id, "text": text, "media": media})
+
     return posts
 
-def _fetch():
-    headers = {"User-Agent": "Mozilla/5.0 ZonerOffersBot public-channel-monitor/1.0"}
-    response = requests.get(_source_url(), headers=headers, timeout=20)
+
+def _fetch(source):
+    url = _source_url(source)
+    if not url:
+        return []
+    headers = {
+        "User-Agent": "Mozilla/5.0 ZonerOffersBot public-channel-monitor/1.0"
+    }
+    response = requests.get(url, headers=headers, timeout=15)
     response.raise_for_status()
     return _extract_posts(response.text)
 
-async def _send_post(bot, app, post):
+
+async def _send_post(bot, app, source, post):
     destinations = list(dict.fromkeys(bot.POST_CHANNELS))
-    # Also reuse the existing auto-publish group registry.
+
     try:
         con = bot.db()
         try:
-            rows = con.execute("SELECT chat_id FROM auto_publish_chats WHERE enabled=1").fetchall()
+            rows = con.execute(
+                "SELECT chat_id FROM auto_publish_chats WHERE enabled=1"
+            ).fetchall()
         finally:
             con.close()
-        destinations.extend([str(r["chat_id"]) for r in rows])
+        destinations.extend(str(r["chat_id"]) for r in rows)
     except Exception:
         log.exception("Could not read auto-publish group registry")
 
@@ -128,37 +173,76 @@ async def _send_post(bot, app, post):
     for target in destinations:
         try:
             if post["media"]:
-                await app.bot.send_photo(chat_id=target, photo=post["media"][0], caption=caption)
+                await app.bot.send_photo(
+                    chat_id=target,
+                    photo=post["media"][0],
+                    caption=caption,
+                )
             else:
                 await app.bot.send_message(chat_id=target, text=caption)
             sent_any = True
         except Exception as exc:
-            log.warning("Source-copy failed for %s -> %s: %s", post["id"], target, exc)
+            log.warning(
+                "Source-copy failed for @%s post %s -> %s: %s",
+                _username(source), post["id"], target, exc,
+            )
 
     return sent_any
+
 
 async def source_copy_loop(app):
     if not COPY_ENABLED:
         log.info("Source-copy is disabled.")
         return
 
-    _ensure_table(__import__("bot"))
     bot = __import__("bot")
-    log.info("📥 Public source-copy monitor started: %s", _source_url())
+    _ensure_table(bot)
+
+    active_sources = []
+    for source in SOURCE_CHANNELS:
+        username = _username(source)
+        if not username:
+            log.warning("⏭️ Skipping inaccessible/private source: %s", source)
+            continue
+        active_sources.append(source)
+
+    if not active_sources:
+        log.warning("📥 No accessible public source channels configured.")
+        return
+
+    log.info(
+        "📥 Fast raw source-copy monitor started: %s",
+        ", ".join("@" + _username(s) for s in active_sources),
+    )
 
     while True:
         try:
-            posts = await asyncio.to_thread(_fetch)
-            # Process oldest first. The preview normally contains only recent posts.
-            for post in posts:
-                if _already_copied(bot, post["id"]):
+            # Fetch sources independently so one broken channel never blocks others.
+            results = await asyncio.gather(
+                *[asyncio.to_thread(_fetch, source) for source in active_sources],
+                return_exceptions=True,
+            )
+
+            for source, result in zip(active_sources, results):
+                if isinstance(result, Exception):
+                    log.warning(
+                        "Source unavailable/skipped @%s: %s",
+                        _username(source), result,
+                    )
                     continue
-                # Mark only after at least one successful destination send.
-                if await _send_post(bot, app, post):
-                    _mark_copied(bot, post["id"])
-                    log.info("📥 Copied source post %s from @%s", post["id"], _username())
+
+                for post in result:
+                    if _already_copied(bot, source, post["id"]):
+                        continue
+                    if await _send_post(bot, app, source, post):
+                        _mark_copied(bot, source, post["id"])
+                        log.info(
+                            "📥 Copied raw source post @%s/%s",
+                            _username(source), post["id"],
+                        )
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("Source-copy cycle failed; retrying")
+
         await asyncio.sleep(COPY_INTERVAL)
