@@ -68,38 +68,67 @@ def _ensure_table(bot):
             CREATE TABLE IF NOT EXISTS source_copy_history (
                 source_channel TEXT NOT NULL,
                 source_message_id TEXT NOT NULL,
+                product_link TEXT DEFAULT '',
                 copied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY(source_channel, source_message_id)
             )
         """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS source_copy_link_history (
+                product_link TEXT PRIMARY KEY,
+                copied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        columns = {
+            row[1] for row in con.execute("PRAGMA table_info(source_copy_history)").fetchall()
+        }
+        if "product_link" not in columns:
+            con.execute("ALTER TABLE source_copy_history ADD COLUMN product_link TEXT DEFAULT ''")
         con.commit()
     finally:
         con.close()
 
 
-def _already_copied(bot, source, message_id):
+def _normalize_link(link):
+    value = (link or "").strip()
+    return value.rstrip("/").lower() if value else ""
+
+
+def _already_copied(bot, source, message_id, product_link=""):
     con = bot.db()
     try:
-        return con.execute(
+        if con.execute(
             "SELECT 1 FROM source_copy_history WHERE source_channel=? AND source_message_id=? LIMIT 1",
             (_username(source).lower(), str(message_id)),
-        ).fetchone() is not None
+        ).fetchone() is not None:
+            return True
+        normalized = _normalize_link(product_link)
+        if normalized and con.execute(
+            "SELECT 1 FROM source_copy_link_history WHERE product_link=? LIMIT 1",
+            (normalized,),
+        ).fetchone() is not None:
+            return True
+        return False
     finally:
         con.close()
 
 
-def _mark_copied(bot, source, message_id):
+def _mark_copied(bot, source, message_id, product_link=""):
     con = bot.db()
     try:
+        normalized = _normalize_link(product_link)
         con.execute(
-            "INSERT OR IGNORE INTO source_copy_history(source_channel, source_message_id) VALUES(?,?)",
-            (_username(source).lower(), str(message_id)),
+            "INSERT OR IGNORE INTO source_copy_history(source_channel, source_message_id, product_link) VALUES(?,?,?)",
+            (_username(source).lower(), str(message_id), normalized),
         )
+        if normalized:
+            con.execute(
+                "INSERT OR IGNORE INTO source_copy_link_history(product_link) VALUES(?)",
+                (normalized,),
+            )
         con.commit()
     finally:
         con.close()
-
-
 def _extract_posts(page):
     soup = BeautifulSoup(page, "html.parser")
     posts = []
@@ -220,6 +249,7 @@ def _format_post(post, source):
         lines.append(f"📉 Discount: {discount}")
     if link:
         lines.extend(["", "🛒 Buy Now", f"👉 {link}"])
+    lines.extend(["", "@offerleloturant"])
     return "\n".join(lines)[:4096]
 
 
@@ -356,17 +386,18 @@ async def source_copy_loop(app):
                     log.warning("Source unavailable @%s: %s", _username(source), result)
                     continue
                 for post in result:
-                    if not _already_copied(bot, source, post["id"]):
-                        candidates.append((post.get("published_at"), source, post))
+                    link = _first_url(post.get("text") or "")
+                    if not _already_copied(bot, source, post["id"], link):
+                        candidates.append((post.get("published_at"), source, post, link))
 
             candidates.sort(
                 key=lambda item: item[0] or datetime.min.replace(tzinfo=timezone.utc)
             )
 
             if candidates:
-                _, source, post = candidates[0]
+                _, source, post, link = candidates[0]
                 if await _send_post(bot, app, post, source):
-                    _mark_copied(bot, source, post["id"])
+                    _mark_copied(bot, source, post["id"], link)
                     log.info("📥 Published formatted source post @%s/%s", _username(source), post["id"])
         except asyncio.CancelledError:
             raise
