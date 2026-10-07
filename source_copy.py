@@ -431,8 +431,89 @@ async def _send_one_destination(app, target, formatted, image):
         return False
 
 
+def _claim_post(bot, source, message_id, product_link="", post=None):
+    """Atomically reserve a post/link before sending so concurrent copier loops
+    cannot publish the same deal repeatedly."""
+    con = bot.db()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        normalized = _normalize_link(product_link)
+        if normalized:
+            if con.execute(
+                "SELECT 1 FROM source_copy_link_history WHERE product_link=? LIMIT 1",
+                (normalized,),
+            ).fetchone() is not None:
+                con.rollback()
+                return False
+            if con.execute(
+                "SELECT 1 FROM published_links WHERE lower(rtrim(url, '/'))=? LIMIT 1",
+                (normalized,),
+            ).fetchone() is not None:
+                con.rollback()
+                return False
+        if con.execute(
+            "SELECT 1 FROM source_copy_history WHERE source_channel=? AND source_message_id=? LIMIT 1",
+            (_username(source).lower(), str(message_id)),
+        ).fetchone() is not None:
+            con.rollback()
+            return False
+        key = _content_key(post or {})
+        if key and con.execute(
+            "SELECT 1 FROM source_copy_content_history WHERE content_key=? LIMIT 1",
+            (key,),
+        ).fetchone() is not None:
+            con.rollback()
+            return False
+
+        con.execute(
+            "INSERT INTO source_copy_history(source_channel, source_message_id, product_link) VALUES(?,?,?)",
+            (_username(source).lower(), str(message_id), normalized),
+        )
+        if normalized:
+            con.execute(
+                "INSERT INTO source_copy_link_history(product_link) VALUES(?)",
+                (normalized,),
+            )
+        if key:
+            con.execute(
+                "INSERT INTO source_copy_content_history(content_key) VALUES(?)",
+                (key,),
+            )
+        con.commit()
+        return True
+    except Exception:
+        con.rollback()
+        log.exception("Could not atomically claim source post")
+        return False
+    finally:
+        con.close()
+
+
+def _release_claim(bot, source, message_id, product_link="", post=None):
+    con = bot.db()
+    try:
+        con.execute(
+            "DELETE FROM source_copy_history WHERE source_channel=? AND source_message_id=?",
+            (_username(source).lower(), str(message_id)),
+        )
+        normalized = _normalize_link(product_link)
+        if normalized:
+            con.execute(
+                "DELETE FROM source_copy_link_history WHERE product_link=?",
+                (normalized,),
+            )
+        key = _content_key(post or {})
+        if key:
+            con.execute(
+                "DELETE FROM source_copy_content_history WHERE content_key=?",
+                (key,),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
 async def _send_post(bot, app, post, source):
-    formatted = _format_post(post, source)
     image_url = post.get("media", [""])[0] if post.get("media") else ""
     image = await asyncio.to_thread(_download_image, image_url)
     targets = _destinations(bot)
@@ -515,13 +596,19 @@ async def source_copy_loop(app):
 
             if candidates:
                 _, source, post, link = candidates[0]
+                # Claim atomically BEFORE Telegram send. This is critical:
+                # multiple source-copy tasks/processes can otherwise all observe
+                # the same unclaimed link and each publish it.
+                if not _claim_post(bot, source, post["id"], link, post):
+                    continue
                 if await _send_post(bot, app, post, source):
                     offer_id = _save_published_offer(bot, post, source)
-                    _mark_copied(bot, source, post["id"], link, post)
                     log.info(
                         "📥 Published + saved source post @%s/%s offer_id=%s",
                         _username(source), post["id"], offer_id,
                     )
+                else:
+                    _release_claim(bot, source, post["id"], link, post)
         except asyncio.CancelledError:
             raise
         except Exception:
