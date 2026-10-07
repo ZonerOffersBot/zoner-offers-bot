@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import hashlib
+import hashlib
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
@@ -77,6 +78,12 @@ def _ensure_table(bot):
         con.execute("""
             CREATE TABLE IF NOT EXISTS source_copy_link_history (
                 product_link TEXT PRIMARY KEY,
+                copied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS source_copy_content_history (
+                content_key TEXT PRIMARY KEY,
                 copied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
