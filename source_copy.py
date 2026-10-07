@@ -514,6 +514,7 @@ def _release_claim(bot, source, message_id, product_link="", post=None):
 
 
 async def _send_post(bot, app, post, source):
+    formatted = _format_post(post, source)
     image_url = post.get("media", [""])[0] if post.get("media") else ""
     image = await asyncio.to_thread(_download_image, image_url)
     targets = _destinations(bot)
