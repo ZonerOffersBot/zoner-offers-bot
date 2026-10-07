@@ -86,6 +86,15 @@ def _ensure_table(bot):
                 copied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Authoritative one-time publication guard for exact normalized links.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS publication_guard (
+                normalized_link TEXT PRIMARY KEY,
+                source_channel TEXT DEFAULT '',
+                source_message_id TEXT DEFAULT '',
+                claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         columns = {
             row[1] for row in con.execute("PRAGMA table_info(source_copy_history)").fetchall()
         }
@@ -178,6 +187,11 @@ def _already_copied(bot, source, message_id, product_link="", post=None):
             return True
         normalized = _normalize_link(product_link)
         if normalized:
+            if con.execute(
+                "SELECT 1 FROM publication_guard WHERE normalized_link=? LIMIT 1",
+                (normalized,),
+            ).fetchone() is not None:
+                return True
             if con.execute(
                 "SELECT 1 FROM source_copy_link_history WHERE product_link=? LIMIT 1",
                 (normalized,),
@@ -445,6 +459,19 @@ def _claim_post(bot, source, message_id, product_link="", post=None):
         con.execute("BEGIN IMMEDIATE")
         normalized = _normalize_link(product_link)
         if normalized:
+            # Final pre-publish gate: the PRIMARY KEY makes this an atomic
+            # one-time lock for the exact normalized product URL.
+            cur = con.execute(
+                """INSERT OR IGNORE INTO publication_guard(
+                       normalized_link, source_channel, source_message_id
+                   ) VALUES(?,?,?)""",
+                (normalized, _username(source).lower(), str(message_id)),
+            )
+            if cur.rowcount != 1:
+                con.rollback()
+                log.warning("🚫 PRE-PUBLISH BLOCK: exact link already claimed: %s", normalized)
+                return False
+
             if con.execute(
                 "SELECT 1 FROM source_copy_link_history WHERE product_link=? LIMIT 1",
                 (normalized,),
@@ -453,6 +480,12 @@ def _claim_post(bot, source, message_id, product_link="", post=None):
                 return False
             if con.execute(
                 "SELECT 1 FROM published_links WHERE lower(rtrim(url, '/'))=? LIMIT 1",
+                (normalized,),
+            ).fetchone() is not None:
+                con.rollback()
+                return False
+            if con.execute(
+                "SELECT 1 FROM offers WHERE lower(rtrim(url, '/'))=? LIMIT 1",
                 (normalized,),
             ).fetchone() is not None:
                 con.rollback()
