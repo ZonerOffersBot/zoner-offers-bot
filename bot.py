@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlparse, parse_qsl, urlencode, urlunparse
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -966,7 +966,7 @@ async def _button_handler_impl(update, context):
         success = 0
         for i in range(count):
             try:
-                if await publish_offer(context.bot, row):
+                if await publish_offer(context.bot, row, allow_duplicate=True):
                     success += 1
             except Exception:
                 log.exception("Manual publish %s/%s failed for offer %s", i + 1, count, offer_id)
@@ -1106,7 +1106,7 @@ async def _button_handler_impl(update, context):
         success = 0
         for i in range(count):
             try:
-                if await publish_offer(context.bot, row):
+                if await publish_offer(context.bot, row, allow_duplicate=True):
                     success += 1
             except Exception:
                 log.exception("Re-publish %s/%s failed for offer %s", i + 1, count, offer_id)
@@ -1795,6 +1795,47 @@ def normalize_candidate(source, title, url):
         "score": score,
     }
 
+def canonical_deal_url(value):
+    """Canonical URL key for cross-publisher duplicate prevention."""
+    try:
+        parsed = urlparse(html.unescape(str(value or "").strip()).rstrip(".,);]"))
+        host = (parsed.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if not host:
+            return str(value or "").strip().rstrip("/").lower()
+        scheme = (parsed.scheme or "https").lower()
+        tracking = {"fbclid", "gclid", "dclid", "msclkid", "ref", "ref_", "tag",
+                    "utm_source", "utm_medium", "utm_campaign", "utm_term",
+                    "utm_content", "utm_id", "igshid", "mc_cid", "mc_eid", "linkid"}
+        query = sorted((k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+                       if k.lower() not in tracking and not k.lower().startswith("utm_"))
+        return urlunparse((scheme, host, (parsed.path or "").rstrip(""),
+                           "", urlencode(query, doseq=True), "")).lower().rstrip("/")
+    except Exception:
+        return str(value or "").strip().rstrip("/").lower()
+
+
+def url_already_published(value):
+    key = canonical_deal_url(value)
+    if not key:
+        return False
+    con = db()
+    try:
+        for table in ("published_links", "offers"):
+            try:
+                rows = con.execute(
+                    f"SELECT url FROM {table} WHERE url IS NOT NULL AND url != ''"
+                ).fetchall()
+            except Exception:
+                continue
+            if any(canonical_deal_url(row["url"]) == key for row in rows):
+                return True
+        return False
+    finally:
+        con.close()
+
+
 def format_publish_card(row):
     """Consistent customer-facing Zoner Offers Bot card; never invent a price."""
     title = html.escape(str(row["title"] or "Latest Deal"))
@@ -1855,8 +1896,11 @@ def format_publish_card(row):
     return "\n".join(lines)
 
 
-async def publish_offer(bot, row):
+async def publish_offer(bot, row, allow_duplicate=False):
     """Publish a cached deal with the real shopping-platform product image only."""
+    if not allow_duplicate and url_already_published(row["url"]):
+        log.info("🚫 Duplicate publication blocked: %s", canonical_deal_url(row["url"]))
+        return False
     text = format_publish_card(row)
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy / View Deal", url=row["url"])]])
     channel_published = False
