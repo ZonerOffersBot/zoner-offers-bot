@@ -35,19 +35,14 @@ async def managed_post_init(app):
         log.exception("❌ Telegram startup check failed")
         raise
 
-    # ⛔ Legacy/normal deal auto-publishing is intentionally DISABLED.
-    # Do not start bot.auto_scan_loop() until the administrator explicitly
-    # asks to re-enable the old auto-publisher. The public source copier
-    # below remains active independently at its own 30-second cadence.
+    # Legacy deal auto-publishing remains disabled; source-copy is independent.
     source_task = asyncio.create_task(source_copy.source_copy_loop(app), name="zoner-source-copy")
     app.bot_data["source_copy_task"] = source_task
-    # Force-join diagnostics are informational only. They must never prevent
-    # the autonomous publisher from starting if a channel is temporarily unavailable.
     try:
         await bot.force_join_diagnostics(app.bot)
     except Exception:
         log.exception("⚠️ Force-join diagnostics failed; publisher remains active")
-    log.info("⛔ Autonomous deal scanner is DISABLED by administrator. Source-copy remains active.")
+    log.info("⛔ Autonomous deal scanner is DISABLED. Source-copy remains active.")
 
 
 async def managed_post_stop(app):
@@ -86,40 +81,24 @@ def build_app():
     )
 
     app.add_handler(ChatMemberHandler(bot.track_auto_publish_chat, ChatMemberHandler.MY_CHAT_MEMBER))
-    # Discover pre-existing groups when the bot receives any group message.
-    # This complements MY_CHAT_MEMBER, which only fires on membership changes.
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, bot.track_group_message), group=1)
-    # Admin Force-Join channel setup input; consumed only while the admin
-    # has explicitly opened the Add Channel screen.
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_force_join_admin_text),
         group=1,
     )
-    
+
     conversation = ConversationHandler(
         entry_points=[
             CommandHandler("addoffer", bot.admin_start),
             CallbackQueryHandler(bot.admin_add_button, pattern=r"^admin_add$"),
         ],
         states={
-            bot.C_TITLE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_title)
-            ],
-            bot.C_PRICE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_price)
-            ],
-            bot.C_OLD: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_old)
-            ],
-            bot.C_CATEGORY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_category)
-            ],
-            bot.C_URL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_url)
-            ],
-            bot.C_COUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_count)
-            ],
+            bot.C_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_title)],
+            bot.C_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_price)],
+            bot.C_OLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_old)],
+            bot.C_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_category)],
+            bot.C_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_url)],
+            bot.C_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot.got_count)],
         },
         fallbacks=[CommandHandler("cancel", bot.cancel)],
     )
@@ -140,11 +119,15 @@ def run():
     if not bot.TOKEN:
         raise RuntimeError("BOT_TOKEN environment variable is missing.")
 
-    bot.init_db()
-    Thread(target=bot.run_health_server, daemon=True).start()
+    # Bind Render's public port immediately, before DB initialization or Telegram
+    # network calls, so Render's web-service port scan can succeed during startup.
+    health_thread = Thread(target=bot.run_health_server, name="zoner-health", daemon=True)
+    health_thread.start()
+    log.info("🌐 Health server starting on Render PORT=%s", __import__("os").getenv("PORT", "10000"))
 
+    bot.init_db()
     app = build_app()
-    log.info("🔥 Zoner Offers AI fast runner is starting.")
+    log.info("🔥 Zoner Offers runner is starting.")
     app.run_polling(
         poll_interval=0.5,
         timeout=20,
