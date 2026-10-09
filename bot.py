@@ -325,8 +325,36 @@ def offer_count():
 def subscriber_count():
     con = db(); n = con.execute("SELECT COUNT(*) n FROM subscribers WHERE enabled=1").fetchone()["n"]; con.close(); return n
 
+def canonical_deal_url(url):
+    """Normalize retailer links so tracking parameters/fragments cannot create duplicate offers."""
+    try:
+        parsed = urlparse((url or "").strip())
+        host = (parsed.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        path = re.sub(r"/+$", "", parsed.path or "") or "/"
+        tracking_prefixes = ("utm_",)
+        tracking_keys = {
+            "tag", "ref", "ref_", "linkcode", "camp", "creative", "creativeasin",
+            "ascsubtag", "asc_source", "asc_campaign", "fbclid", "gclid", "igshid",
+            "mc_cid", "mc_eid", "affid", "aff_id", "aff_sub", "sourceid"
+        }
+        query = []
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            k = key.lower()
+            if k in tracking_keys or any(k.startswith(prefix) for prefix in tracking_prefixes):
+                continue
+            query.append((key, value))
+        query.sort()
+        return urlunparse((parsed.scheme.lower(), host, path, "", urlencode(query), ""))
+    except Exception:
+        return (url or "").split("#", 1)[0].rstrip("/")
+
+
 def fingerprint(title, url):
-    return hashlib.sha256((re.sub(r"\W+", " ", title.lower()).strip() + "|" + url.split("?")[0]).encode()).hexdigest()
+    clean_title = re.sub(r"\W+", " ", html.unescape(title or "").lower()).strip()
+    canonical_url = canonical_deal_url(url)
+    return hashlib.sha256((clean_title + "|" + canonical_url).encode()).hexdigest()
 
 def guess_category(text):
     """Classify the actual product, not the retailer/source channel.
@@ -828,22 +856,46 @@ def offer_buttons(rows, back="offers"):
     return InlineKeyboardMarkup(buttons)
 
 def offer_text(row):
-    title = html.escape(row["title"])
-    price = html.escape(row["price"])
-    category = html.escape(CATEGORIES.get(row["category"], row["category"]))
-    text = f"🔥 <b>{title}</b>\n\n💰 <b>₹{price}</b>"
-    if row["old_price"]:
-        text += f"  <s>₹{html.escape(str(row['old_price']))}</s>"
-    if row["discount"]:
-        text += f"  <b>({row['discount']}% OFF)</b>"
-    if row["score"]:
-        text += f"\n🤖 Deal Score: <b>{row['score']}/100</b>"
-    if row["source"]:
-        text += f"\n🔎 Source: {html.escape(row['source'])}"
+    """Render the approved Zoner Offers Bot product-card format (never the old AI alert format)."""
+    title = html.escape(str(row["title"] or "Product"))
+    category = html.escape(CATEGORIES.get(row["category"], row["category"] or "Shopping"))
+    source = html.escape(str(row["source"] or "Shopping platform"))
+    raw_price = str(row["price"] or "").replace(",", "").replace("₹", "").strip()
+    match = re.search(r"\d+(?:\.\d+)?", raw_price)
+    amount = float(match.group()) if match else None
+    if amount is None:
+        price_range = "Check live price"
+    elif amount <= 200:
+        price_range = "₹1–₹200"
+    elif amount <= 500:
+        price_range = "₹201–₹500"
+    elif amount <= 1000:
+        price_range = "₹501–₹1,000"
+    elif amount <= 2000:
+        price_range = "₹1,001–₹2,000"
+    elif amount <= 5000:
+        price_range = "₹2,001–₹5,000"
+    else:
+        price_range = "₹5,001+"
+    host = html.escape((urlparse(str(row["url"] or "")).hostname or source).replace("www.", ""))
+    discount = f"{int(row['discount'])}% OFF" if row["discount"] else "See product page"
+    score = f"{int(row['score'])}/100" if row["score"] else "Not available"
     description = html.escape((row["description"] or "").strip()) if "description" in row.keys() else ""
-    if description:
-        text += f"\n\n📝 <b>Description:</b> {description[:700]}"
-    return text + f"\n🏷️ {category}\n\n⚡ Check price before checkout; offers can change."
+    if not description:
+        description = "Check the retailer page for current price, stock and product details."
+    return (
+        "🛍️ <b>𝗭𝗢𝗡𝗘𝗥 𝗢𝗙𝗙𝗘𝗥𝗦 𝗕𝗢𝗧</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📦 <b>Product:</b> {title}\n"
+        f"🏷️ <b>Category:</b> {category}\n"
+        f"🏪 <b>Brand / Source:</b> {source}\n"
+        f"💰 <b>Price Range:</b> {html.escape(price_range)}\n"
+        f"🔥 <b>Discount:</b> {html.escape(discount)}\n"
+        f"🛒 <b>Shopping Website:</b> {host}\n"
+        f"🎯 <b>Deal Score:</b> {html.escape(score)}\n\n"
+        f"📝 <b>Product Details:</b> {description[:700]}\n\n"
+        "⚡ Price and availability may change. Check the product page before checkout."
+    )
 
 def offer_markup(row, back="offers"):
     return InlineKeyboardMarkup([
@@ -1553,6 +1605,13 @@ def insert_offer(title, price, old_price, category, url, source, discount, score
     fp = fingerprint(title, url)
     con = db()
     try:
+        # A retailer URL is the strongest duplicate key: titles often differ
+        # between RSS feeds even when they point to the exact same product.
+        canonical = canonical_deal_url(url)
+        for saved in con.execute("SELECT id, url FROM offers").fetchall():
+            if canonical and canonical_deal_url(saved["url"]) == canonical:
+                log.info("Skipping duplicate product URL; existing offer id=%s", saved["id"])
+                return None
         cur = con.execute("""INSERT INTO offers(
             title,price,old_price,category,url,source,discount,score,fingerprint,image_url,description
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
@@ -1738,7 +1797,6 @@ def get_cached_offer_for_publish():
             FROM publish_history GROUP BY offer_id
         ) h ON h.offer_id = o.id
         WHERE h.last_published IS NULL
-           OR datetime(h.last_published) <= datetime('now', '-2 hours')
         ORDER BY CASE WHEN h.last_published IS NULL THEN 0 ELSE 1 END,
                  datetime(COALESCE(h.last_published, o.created_at)) ASC,
                  o.id ASC
@@ -1887,8 +1945,8 @@ def normalize_candidate(source, title, url):
     }
 
 async def publish_offer(bot, row):
-    """Publish a cached deal with the real shopping-platform product image only."""
-    text = "🤖 <b>AI Deal Alert</b>\n\n" + offer_text(row)
+    """Publish a cached deal using the approved Zoner Offers Bot card format."""
+    text = offer_text(row)
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy / View Deal", url=row["url"])]])
     channel_published = False
 
@@ -2098,36 +2156,20 @@ async def scan_and_publish(bot, manual=False):
         except Exception:
             log.exception("New product discovery failed; cached publishing will continue")
 
-    # If cache was empty, seed a fallback after discovery and publish it now.
+    # If no never-published product is available, do not recycle fallback URLs.
+    # Wait for the next discovery cycle rather than posting a duplicate deal.
     if row is None:
         row = get_cached_offer_for_publish()
         if row is None:
-            fallback_pool = list(FALLBACK_PRODUCTS)
-            offset = datetime.now(timezone.utc).minute % len(fallback_pool)
-            fallback_pool = fallback_pool[offset:] + fallback_pool[:offset]
-            for source, title, url in fallback_pool:
-                candidate = normalize_candidate(source, title + " Deal", url)
-                oid = insert_offer(
-                    candidate["title"], candidate["price"], candidate["old_price"],
-                    candidate["category"], candidate["url"], candidate["source"],
-                    candidate["discount"], candidate["score"],
-                    image_url="",
-                    description=generate_product_description(candidate["title"], candidate["category"])
-                )
-                if oid:
-                    row = get_offer(oid)
-                    break
-        if row is not None:
-            try:
-                published = await publish_offer(bot, row)
-            except Exception:
-                log.exception("Publishing cycle failed for newly cached offer")
-                published = False
-            if published:
-                log.info("🚀 Published newly cached deal id=%s; publication ledger updated immediately", row["id"])
-        else:
-            log.error("No cached/fallback offer available for publishing")
-            return "Added: 0\nFiltered/duplicate: 0\nCandidates checked: 0"
+            log.info("No new unpublished deals available; skipping this cycle to prevent duplicates.")
+            return "No new unpublished deals; skipped to prevent duplicate posts."
+        try:
+            published = await publish_offer(bot, row)
+        except Exception:
+            log.exception("Publishing cycle failed for newly discovered offer")
+            published = False
+        if published:
+            log.info("Published newly discovered deal id=%s using approved format", row["id"])
 
     return "Auto-publisher cycle complete"
 
