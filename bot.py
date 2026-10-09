@@ -1816,20 +1816,35 @@ def canonical_deal_url(value):
         return str(value or "").strip().rstrip("/").lower()
 
 
-def url_already_published(value):
+def url_already_published(value, offer_id=None):
     key = canonical_deal_url(value)
     if not key:
         return False
     con = db()
     try:
-        for table in ("published_links", "offers"):
+        checks = (
+            ("published_links", "url"),
+            ("source_copy_link_history", "product_link"),
+            ("publication_guard", "normalized_link"),
+        )
+        for table, column in checks:
             try:
                 rows = con.execute(
-                    f"SELECT url FROM {table} WHERE url IS NOT NULL AND url != ''"
+                    f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != ''"
                 ).fetchall()
             except Exception:
                 continue
-            if any(canonical_deal_url(row["url"]) == key for row in rows):
+            if any(canonical_deal_url(row[0]) == key for row in rows):
+                return True
+
+        try:
+            rows = con.execute("SELECT id, url FROM offers WHERE url IS NOT NULL AND url != ''").fetchall()
+        except Exception:
+            rows = []
+        for row in rows:
+            if offer_id is not None and str(row["id"]) == str(offer_id):
+                continue
+            if canonical_deal_url(row["url"]) == key:
                 return True
         return False
     finally:
@@ -1898,7 +1913,7 @@ def format_publish_card(row):
 
 async def publish_offer(bot, row, allow_duplicate=False):
     """Publish a cached deal with the real shopping-platform product image only."""
-    if not allow_duplicate and url_already_published(row["url"]):
+    if not allow_duplicate and url_already_published(row["url"], row["id"]):
         log.info("🚫 Duplicate publication blocked: %s", canonical_deal_url(row["url"]))
         return False
     text = format_publish_card(row)
