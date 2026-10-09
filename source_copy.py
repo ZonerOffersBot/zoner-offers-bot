@@ -190,6 +190,27 @@ def _normalize_link(link):
     except Exception:
         return value.rstrip("/").lower()
 
+def _link_seen_in_database(con, normalized):
+    """Compare canonical links against all durable ledgers, including older rows."""
+    if not normalized:
+        return False
+    tables = (
+        ("publication_guard", "normalized_link"),
+        ("source_copy_link_history", "product_link"),
+        ("published_links", "url"),
+        ("offers", "url"),
+    )
+    for table, column in tables:
+        try:
+            rows = con.execute(f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != ''").fetchall()
+        except Exception:
+            continue
+        for row in rows:
+            if _normalize_link(row[0]) == normalized:
+                return True
+    return False
+
+
 def _public_channel_has_link(target, product_link):
     """Check the public Telegram preview for a link already published in a destination.
 
@@ -306,28 +327,8 @@ def _already_copied(bot, source, message_id, product_link="", post=None):
             return True
         normalized = _normalize_link(product_link)
         if normalized:
-            if con.execute(
-                "SELECT 1 FROM publication_guard WHERE normalized_link=? LIMIT 1",
-                (normalized,),
-            ).fetchone() is not None:
-                return True
-            if con.execute(
-                "SELECT 1 FROM source_copy_link_history WHERE product_link=? LIMIT 1",
-                (normalized,),
-            ).fetchone() is not None:
-                return True
-            # Durable publication ledger: once this exact normalized URL
-            # has ever been published, never publish it again.
-            if con.execute(
-                "SELECT 1 FROM published_links WHERE lower(rtrim(url, '/'))=? LIMIT 1",
-                (normalized,),
-            ).fetchone() is not None:
-                return True
-            # Also block URLs already stored in the offer database.
-            if con.execute(
-                "SELECT 1 FROM offers WHERE lower(rtrim(url, '/'))=? LIMIT 1",
-                (normalized,),
-            ).fetchone() is not None:
+            # Canonical comparison catches legacy rows and affiliate/tracking variants.
+            if _link_seen_in_database(con, normalized):
                 return True
         content_key = _content_key(post or {})
         if content_key and con.execute(
@@ -645,24 +646,19 @@ def _claim_post(bot, source, message_id, product_link="", post=None):
                 log.warning("🚫 PRE-PUBLISH BLOCK: exact link already claimed: %s", normalized)
                 return False
 
-            if con.execute(
-                "SELECT 1 FROM source_copy_link_history WHERE product_link=? LIMIT 1",
-                (normalized,),
-            ).fetchone() is not None:
-                con.rollback()
-                return False
-            if con.execute(
-                "SELECT 1 FROM published_links WHERE lower(rtrim(url, '/'))=? LIMIT 1",
-                (normalized,),
-            ).fetchone() is not None:
-                con.rollback()
-                return False
-            if con.execute(
-                "SELECT 1 FROM offers WHERE lower(rtrim(url, '/'))=? LIMIT 1",
-                (normalized,),
-            ).fetchone() is not None:
-                con.rollback()
-                return False
+            # The just-inserted guard row is visible in this transaction, so check
+            # the other ledgers directly to avoid treating our own claim as a duplicate.
+            for table, column in (("source_copy_link_history", "product_link"),
+                                  ("published_links", "url"), ("offers", "url")):
+                try:
+                    existing_links = con.execute(
+                        f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} != ''"
+                    ).fetchall()
+                except Exception:
+                    existing_links = []
+                if any(_normalize_link(row[0]) == normalized for row in existing_links):
+                    con.rollback()
+                    return False
 
         if con.execute(
             "SELECT 1 FROM source_copy_history WHERE source_channel=? AND source_message_id=? LIMIT 1",
