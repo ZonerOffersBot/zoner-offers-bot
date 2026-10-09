@@ -537,41 +537,77 @@ async def membership_status(bot, user_id):
     if is_user_verified(user_id):
         return True
 
-    # A first-time user must pass every currently configured required channel.
-    for channel in get_force_join_channels():
-        required_channel = channel["chat_ref"]
+    # Confirm membership in every active required channel. Normalize enum/status
+    # representations defensively because PTB/API versions may expose these as
+    # strings or enum-like values (e.g. "ChatMemberStatus.MEMBER").
+    channels = get_force_join_channels()
+    if not channels:
+        log.error("Force-join check: no active required channels configured.")
+        return False
+
+    for channel in channels:
+        required_channel = str(channel["chat_ref"]).strip()
         try:
-            chat = await asyncio.wait_for(bot.get_chat(chat_id=required_channel), timeout=8.0)
+            chat = await asyncio.wait_for(
+                bot.get_chat(chat_id=required_channel), timeout=12.0
+            )
             passed = False
-            for attempt in range(3):
+            last_error = None
+            for attempt in range(4):
                 try:
                     member = await asyncio.wait_for(
-                        bot.get_chat_member(chat_id=chat.id, user_id=user_id), timeout=10.0
+                        bot.get_chat_member(chat_id=chat.id, user_id=user_id),
+                        timeout=12.0,
                     )
-                    status = str(getattr(member, "status", "")).lower()
+                    raw_status = getattr(member, "status", "")
+                    status = str(getattr(raw_status, "value", raw_status)).lower()
+                    status = status.rsplit(".", 1)[-1]
                     is_member = getattr(member, "is_member", None)
-                    passed = status in {"member", "administrator", "creator"} or (
-                        status == "restricted" and is_member is True
+                    passed = (
+                        status in {"member", "administrator", "creator"}
+                        or (status == "restricted" and is_member is True)
+                    )
+                    log.info(
+                        "Force-join result user=%s channel=%s chat_id=%s status=%s "
+                        "is_member=%s passed=%s",
+                        user_id, required_channel, chat.id, status, is_member, passed,
                     )
                     if passed:
                         break
-                    if attempt < 2:
-                        await asyncio.sleep(1.0)
+                    # A definitive left/kicked result will not improve with retries.
+                    if status in {"left", "kicked", "banned"}:
+                        break
                 except Exception as exc:
-                    log.warning("Force-join check failed channel=%s user=%s attempt=%s: %s",
-                                required_channel, user_id, attempt + 1, exc)
-                    if attempt < 2:
-                        await asyncio.sleep(1.0)
-                    else:
-                        return False
+                    last_error = exc
+                    log.warning(
+                        "Force-join API attempt failed channel=%s user=%s attempt=%s: %s",
+                        required_channel, user_id, attempt + 1, exc,
+                    )
+                if attempt < 3:
+                    await asyncio.sleep(1.0 + attempt * 0.5)
+
             if not passed:
+                if last_error:
+                    log.error(
+                        "Force-join could not verify user=%s channel=%s; check bot admin "
+                        "permissions and channel reference. Last error: %s",
+                        user_id, required_channel, last_error,
+                    )
+                else:
+                    log.info(
+                        "Force-join denied user=%s channel=%s: Telegram reports not a member.",
+                        user_id, required_channel,
+                    )
                 return False
         except Exception as exc:
-            log.warning("Force-join API check failed channel=%s user=%s: %s",
-                        required_channel, user_id, exc)
+            log.error(
+                "Force-join could not open required channel=%s for user=%s: %s",
+                required_channel, user_id, exc,
+            )
             return False
 
     mark_user_verified(user_id)
+    log.info("Force-join verified user=%s across %s required channels.", user_id, len(channels))
     return True
 
 
