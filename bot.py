@@ -424,7 +424,7 @@ def score_deal(title, discount, source):
 MEMBERSHIP_CACHE_SECONDS = 0
 
 def get_force_join_channels():
-    """Return active force-join channels, seeding the two official Zoner channels."""
+    """Return active force-join channels and restore required defaults safely."""
     con = db()
     try:
         con.execute("""CREATE TABLE IF NOT EXISTS force_join_channels (
@@ -434,10 +434,12 @@ def get_force_join_channels():
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""")
-
-        # These are the two channels already configured for Zoner Offers publishing.
-        # Add them to the force-join list for existing databases without deleting
-        # any channels that an administrator has already configured.
+        # Remember intentional admin deletions so defaults do not reappear after
+        # every menu refresh, while restoring defaults lost from an old/reset DB.
+        con.execute("""CREATE TABLE IF NOT EXISTS force_join_exclusions (
+            chat_ref TEXT PRIMARY KEY,
+            deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
         defaults = [
             ("@zoneroffers", "Zoner Offers", "https://t.me/zoneroffers"),
             ("@offerleloturant", "Offer Le Loturant", "https://t.me/offerleloturant"),
@@ -448,13 +450,18 @@ def get_force_join_channels():
             defaults.append((legacy, legacy, legacy_url))
 
         for ref, title, invite_url in defaults:
+            excluded = con.execute(
+                "SELECT 1 FROM force_join_exclusions WHERE chat_ref=?", (ref,)
+            ).fetchone()
+            if excluded:
+                continue
             con.execute(
-                "INSERT OR IGNORE INTO force_join_channels"
-                "(chat_ref,title,invite_url,enabled) VALUES(?,?,?,1)",
+                "INSERT INTO force_join_channels(chat_ref,title,invite_url,enabled) "
+                "VALUES(?,?,?,1) ON CONFLICT(chat_ref) DO UPDATE SET "
+                "title=excluded.title, invite_url=excluded.invite_url, enabled=1",
                 (ref, title, invite_url),
             )
         con.commit()
-
         return con.execute(
             "SELECT chat_ref, title, invite_url FROM force_join_channels "
             "WHERE enabled=1 ORDER BY created_at ASC, chat_ref ASC"
@@ -485,6 +492,11 @@ def add_force_join_channel(chat_ref, title="", invite_url=""):
             chat_ref TEXT PRIMARY KEY, title TEXT DEFAULT '', invite_url TEXT DEFAULT '',
             enabled INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""")
+        con.execute("""CREATE TABLE IF NOT EXISTS force_join_exclusions (
+            chat_ref TEXT PRIMARY KEY,
+            deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        con.execute("DELETE FROM force_join_exclusions WHERE chat_ref=?", (ref,))
         con.execute(
             "INSERT INTO force_join_channels(chat_ref,title,invite_url,enabled) VALUES(?,?,?,1) "
             "ON CONFLICT(chat_ref) DO UPDATE SET title=excluded.title, invite_url=excluded.invite_url, enabled=1",
@@ -498,6 +510,13 @@ def add_force_join_channel(chat_ref, title="", invite_url=""):
 def delete_force_join_channel(chat_ref):
     con = db()
     try:
+        con.execute("""CREATE TABLE IF NOT EXISTS force_join_exclusions (
+            chat_ref TEXT PRIMARY KEY,
+            deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
+        con.execute(
+            "INSERT OR IGNORE INTO force_join_exclusions(chat_ref) VALUES(?)", (chat_ref,)
+        )
         con.execute("UPDATE force_join_channels SET enabled=0 WHERE chat_ref=?", (chat_ref,))
         changed = con.total_changes > 0
         con.commit()
