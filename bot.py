@@ -911,15 +911,27 @@ async def _button_handler_impl(update, context):
         finally:
             con.close()
 
-        # One-time join acknowledgement. We intentionally do not call
-        # Telegram getChatMember here: that API was causing the previous
-        # "Verification not complete" failures. Pressing Check Again once
-        # records lifetime verification for this Telegram account.
+        # Check all active required channels before granting lifetime access.
+        # Telegram API failures must never be mistaken for successful membership.
+        if not is_admin(update) and not is_user_verified(user_id):
+            verified = await membership_status(context.bot, user_id)
+            if not verified:
+                await query.answer(
+                    "Membership verify nahi hui. Dono required channels join karke dobara try karein.",
+                    show_alert=True,
+                )
+                await query.edit_message_text(
+                    join_gate_text(),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=join_gate_markup(),
+                )
+                return
+
         if not is_user_verified(user_id):
             mark_user_verified(user_id)
 
         await query.edit_message_text(
-            "✅ <b>Channel join confirmed!</b>\n\n"
+            "✅ <b>Channel join verified!</b>\\n\\n"
             "🔥 Welcome to Zoner Offers AI. Choose an option:",
             parse_mode=ParseMode.HTML,
             reply_markup=main_menu(user_id),
