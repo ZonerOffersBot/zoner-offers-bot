@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlparse, urlunparse, parse_qsl, urlencode
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
