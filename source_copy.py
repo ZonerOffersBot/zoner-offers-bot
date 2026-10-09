@@ -161,7 +161,7 @@ def _release_runtime_lock(bot):
 
 def _normalize_link(link):
     """Canonicalize deal URLs to block tracking-parameter and casing duplicates."""
-    value = html.unescape((link or "").strip()).strip(" \t\r\n<>()[]{}.,;!\\"'")
+    value = html.unescape((link or "").strip()).strip(" \t\r\n<>()[]{}.,;!\"'")
     if not value:
         return ""
     try:
