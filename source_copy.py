@@ -1,7 +1,7 @@
 """
 Public Telegram deal-source copier for Zoner Offers.
 
-Four public sources, one formatted post every 5 minutes, 48-hour backlog,
+Four public sources, one formatted post every 15 minutes, 48-hour backlog,
 duplicate protection, image upload with text fallback, and destination
 permission diagnostics.
 """
@@ -41,7 +41,7 @@ SOURCE_CHANNELS = [
 COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {
     "0", "false", "off", "no"
 }
-COPY_INTERVAL = 300
+COPY_INTERVAL = 900
 BACKLOG_HOURS = 48
 RUNTIME_LOCK_LEASE_SECONDS = 600
 RUNTIME_LOCK_OWNER = uuid.uuid4().hex
@@ -718,15 +718,12 @@ async def source_copy_loop(app):
 
             if candidates:
                 _, source, post, link = candidates[0]
+                sent = False
+                attempted = False
 
-                # The duplicate check, atomic claim, and Telegram send are
-                # serialized inside one process. This closes the race where two
-                # source-copy workers both check the public channel before either
-                # message becomes visible there.
+                # Serialize duplicate checks and publication. Duplicate skips
+                # must still reach the interval sleep below (no tight polling loop).
                 async with PUBLICATION_LOCK:
-                    # Telegram itself is the final durable publication ledger for
-                    # the public Zoner channel. This catches links published by an
-                    # older deployment/process whose SQLite history is missing/reset.
                     already_on_zoner = await asyncio.to_thread(
                         _public_channel_has_link, "@zoneroffers", link
                     )
@@ -736,31 +733,26 @@ async def source_copy_loop(app):
                             _normalize_link(link),
                         )
                         _mark_copied(bot, source, post["id"], link, post)
-                        continue
-
-                    # Re-check the local durable guard after entering the lock.
-                    # Another worker may have claimed the candidate while this
-                    # worker was building the candidate list.
-                    if _already_copied(bot, source, post["id"], link, post):
+                    elif _already_copied(bot, source, post["id"], link, post):
                         log.warning(
                             "🚫 LOCKED PRE-PUBLISH BLOCK: exact link already recorded: %s",
                             _normalize_link(link),
                         )
-                        continue
-
-                    # Claim immediately before Telegram send. Never release the
-                    # claim on failure: a partial Telegram send must not be retried
-                    # as a duplicate link.
-                    if not _claim_post(bot, source, post["id"], link, post):
-                        continue
-                    try:
-                        sent = await _send_post(bot, app, post, source)
-                    except Exception:
-                        sent = False
-                        log.exception(
-                            "⚠️ Source post processing failed; skipping without stopping publisher: @%s/%s",
-                            _username(source), post["id"],
+                    elif not _claim_post(bot, source, post["id"], link, post):
+                        log.warning(
+                            "🚫 Publication claim already exists; skipping: %s",
+                            _normalize_link(link),
                         )
+                    else:
+                        attempted = True
+                        try:
+                            sent = await _send_post(bot, app, post, source)
+                        except Exception:
+                            sent = False
+                            log.exception(
+                                "⚠️ Source post processing failed; skipping without stopping publisher: @%s/%s",
+                                _username(source), post["id"],
+                            )
 
                 if sent:
                     try:
@@ -774,9 +766,9 @@ async def source_copy_loop(app):
                         "📥 Published + permanently blocked source post @%s/%s offer_id=%s",
                         _username(source), post["id"], offer_id,
                     )
-                else:
+                elif attempted:
                     log.warning(
-                        "⏭️ Source post skipped after send/copy problem; publisher continues: %s",
+                        "⏭️ Source post send failed; publisher continues: %s",
                         _normalize_link(link),
                     )
         except asyncio.CancelledError:
