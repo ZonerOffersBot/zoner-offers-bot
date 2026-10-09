@@ -855,8 +855,17 @@ async def source_copy_loop(app):
                         log.exception(
                             "⚠️ Published post could not be saved; continuing publisher"
                         )
+                    if offer_id:
+                        try:
+                            saved_offer = bot.get_offer(offer_id)
+                            bot.record_publication(
+                                offer_id, "source-copy", link,
+                                saved_offer["category"] if saved_offer else "other",
+                            )
+                        except Exception:
+                            log.exception("Published source offer could not be added to Latest Offers history")
                     log.info(
-                        "📥 Published + permanently blocked source post @%s/%s offer_id=%s",
+                        "📥 Published + saved source post @%s/%s offer_id=%s",
                         _username(source), post["id"], offer_id,
                     )
                 else:
@@ -869,4 +878,6 @@ async def source_copy_loop(app):
         except Exception:
             log.exception("Source-copy cycle failed; retrying")
 
-        await asyncio.sleep(COPY_INTERVAL)
+        # Check for fresh source posts regularly; the shared DB lease still
+        # permits at most one successful automatic post every 900 seconds.
+        await asyncio.sleep(60)
