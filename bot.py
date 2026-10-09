@@ -1795,9 +1795,69 @@ def normalize_candidate(source, title, url):
         "score": score,
     }
 
+def format_publish_card(row):
+    """Consistent customer-facing Zoner Offers Bot card; never invent a price."""
+    title = html.escape(str(row["title"] or "Latest Deal"))
+    source = html.escape(str(row["source"] or "Shopping Platform"))
+    category_key = str(row["category"] or "other")
+    category = html.escape(str(CATEGORIES.get(category_key, category_key)))
+    raw_price = str(row["price"] or "").strip()
+    numeric = re.sub(r"[^0-9.]", "", raw_price.replace(",", ""))
+    price_range = "Not listed"
+    try:
+        amount = float(numeric) if numeric else None
+        if amount is not None:
+            if amount <= 200:
+                price_range = "₹1–₹200"
+            elif amount <= 500:
+                price_range = "₹201–₹500"
+            elif amount <= 1000:
+                price_range = "₹501–₹1,000"
+            elif amount <= 2000:
+                price_range = "₹1,001–₹2,000"
+            elif amount <= 5000:
+                price_range = "₹2,001–₹5,000"
+            else:
+                price_range = "₹5,001+"
+    except (TypeError, ValueError):
+        pass
+
+    website = "Not identified"
+    try:
+        host = (urlsplit(str(row["url"] or "")).hostname or "").lower()
+        website = host[4:] if host.startswith("www.") else (host or website)
+    except Exception:
+        pass
+
+    discount = int(row["discount"] or 0)
+    score = row["score"]
+    score_label = f"{int(score)}/100" if score is not None else "N/A"
+    description = ""
+    try:
+        description = html.escape(str(row["description"] or "").strip()[:320])
+    except Exception:
+        pass
+
+    lines = [
+        "🔥 <b>ZONER OFFERS BOT</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"📂 <b>Category:</b> {category}",
+        f"🛍️ <b>Product Name:</b> {title}",
+        f"🏷️ <b>Brand / Source:</b> {source}",
+        f"🏪 <b>Shopping Website:</b> {html.escape(website)}",
+        f"💰 <b>Price Range:</b> {html.escape(price_range)}",
+        f"📉 <b>Discount:</b> {discount}% OFF" if discount else "📉 <b>Discount:</b> Not listed",
+        f"🎯 <b>Deal Score:</b> {score_label}",
+    ]
+    if description:
+        lines.append(f"📝 <b>Description:</b> {description}")
+    lines.extend(["", "⚡ Price and availability may change."])
+    return "\n".join(lines)
+
+
 async def publish_offer(bot, row):
     """Publish a cached deal with the real shopping-platform product image only."""
-    text = "🤖 <b>AI Deal Alert</b>\n\n" + offer_text(row)
+    text = format_publish_card(row)
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy / View Deal", url=row["url"])]])
     channel_published = False
 
