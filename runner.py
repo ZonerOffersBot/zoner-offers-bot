@@ -35,19 +35,21 @@ async def managed_post_init(app):
         log.exception("❌ Telegram startup check failed")
         raise
 
-    # ⛔ Legacy/normal deal auto-publishing is intentionally DISABLED.
-    # Do not start bot.auto_scan_loop() until the administrator explicitly
-    # asks to re-enable the old auto-publisher. The public source copier
-    # below remains active independently at its own 30-second cadence.
+    # Start the normal deal publisher and public-source copier as separate tasks.
+    # The normal publisher owns the strict 15-minute cadence in bot.auto_scan_loop;
+    # the source copier has its own cadence and duplicate guard.
+    auto_task = asyncio.create_task(bot.auto_scan_loop(app), name="zoner-auto-publisher")
+    app.bot_data["auto_scan_task"] = auto_task
     source_task = asyncio.create_task(source_copy.source_copy_loop(app), name="zoner-source-copy")
     app.bot_data["source_copy_task"] = source_task
+
     # Force-join diagnostics are informational only. They must never prevent
-    # the autonomous publisher from starting if a channel is temporarily unavailable.
+    # publishing tasks from starting if a required channel is temporarily unavailable.
     try:
         await bot.force_join_diagnostics(app.bot)
     except Exception:
-        log.exception("⚠️ Force-join diagnostics failed; publisher remains active")
-    log.info("⛔ Autonomous deal scanner is DISABLED by administrator. Source-copy remains active.")
+        log.exception("⚠️ Force-join diagnostics failed; publishing tasks remain active")
+    log.info("✅ Auto publisher started (15-minute cadence); source-copy task started.")
 
 
 async def managed_post_stop(app):
