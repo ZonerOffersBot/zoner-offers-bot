@@ -817,9 +817,9 @@ async def start(update, context):
     finally:
         con.close()
 
-    # Show the channel-join screen on first start, but do NOT call Telegram
-    # membership verification. This avoids the previous verification failures.
-    if is_user_verified(user_id):
+    # Admins and users with a saved lifetime verification go straight to the menu.
+    # New users see the gate, and membership is checked when they press Continue.
+    if is_admin(update) or is_user_verified(user_id):
         await update.message.reply_text(
             "🔥 <b>Welcome back to Zoner Offers AI!</b>\n\n"
             "👇 Choose an option:",
@@ -894,11 +894,15 @@ async def button_handler(update, context):
 
 async def _button_handler_impl(update, context):
     query = update.callback_query
-    try:
-        await query.answer()
-    except Exception:
-        log.debug("Callback acknowledgement failed for %s", getattr(query, "data", None))
     data = query.data
+    # Join verification needs to decide whether to show an alert before answering.
+    # Answering it here and again in the failure branch causes Telegram's
+    # "query is too old or already answered" error.
+    if data != "check_join":
+        try:
+            await query.answer()
+        except Exception:
+            log.debug("Callback acknowledgement failed for %s", data)
 
     if data == "check_join":
         user_id = query.from_user.id
@@ -916,10 +920,13 @@ async def _button_handler_impl(update, context):
         if not is_admin(update) and not is_user_verified(user_id):
             verified = await membership_status(context.bot, user_id)
             if not verified:
-                await query.answer(
-                    "Membership verify nahi hui. Dono required channels join karke dobara try karein.",
-                    show_alert=True,
-                )
+                try:
+                    await query.answer(
+                        "Membership verify nahi hui. Dono required channels join karke dobara try karein.",
+                        show_alert=True,
+                    )
+                except Exception:
+                    log.debug("Could not show force-join verification alert for user %s", user_id)
                 await query.edit_message_text(
                     join_gate_text(),
                     parse_mode=ParseMode.HTML,
@@ -929,6 +936,11 @@ async def _button_handler_impl(update, context):
 
         if not is_user_verified(user_id):
             mark_user_verified(user_id)
+
+        try:
+            await query.answer()
+        except Exception:
+            log.debug("Could not acknowledge successful join check for user %s", user_id)
 
         await query.edit_message_text(
             "✅ <b>Channel join verified!</b>\\n\\n"
