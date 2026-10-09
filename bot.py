@@ -444,10 +444,9 @@ def get_force_join_channels():
             ("@zoneroffers", "Zoner Offers", "https://t.me/zoneroffers"),
             ("@offerleloturant", "Offer Le Loturant", "https://t.me/offerleloturant"),
         ]
-        legacy = required_channel_ref_legacy()
-        legacy_url = required_channel_url_legacy()
-        if legacy not in {item[0] for item in defaults}:
-            defaults.append((legacy, legacy, legacy_url))
+        # Only the two intended defaults are seeded here. A stale CHANNEL_ID
+        # Render variable must not silently add a third, unexpected join gate.
+        # Additional channels are managed explicitly through the admin panel.
 
         for ref, title, invite_url in defaults:
             excluded = con.execute(
