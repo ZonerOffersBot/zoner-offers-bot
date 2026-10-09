@@ -161,7 +161,7 @@ def _release_runtime_lock(bot):
 
 def _normalize_link(link):
     """Canonicalize deal URLs to block tracking-parameter and casing duplicates."""
-    value = html.unescape((link or "").strip()).strip(" \\t\\r\\n<>()[]{}.,;!\\\"'")
+    value = html.unescape((link or "").strip()).strip(" \t\r\n<>()[]{}.,;!\\"'")
     if not value:
         return ""
     try:
@@ -245,7 +245,7 @@ def _save_published_offer(bot, post, source):
 
     brand = _brand(original)
     discount_text = _discount(original)
-    discount_match = re.search(r"(\d{1,3})\s*%", discount_text or "")
+        discount_match = re.search(r"(\d{1,3})\s*%", discount_text or "")
     discount = min(int(discount_match.group(1)), 100) if discount_match else 0
     category = bot.guess_category(" ".join([title, original, brand, _username(source)]))
     source_name = _username(source) or "Telegram"
@@ -500,7 +500,7 @@ def _format_post(post, source):
     try:
         deal_bot = __import__("bot")
         category = deal_bot.guess_category(" ".join([product, original, brand, source_name]))
-        discount_match = re.search(r"(\\d{1,3})\\s*%", discount_text or "")
+        discount_match = re.search(r"(\d{1,3})\s*%", discount_text or "")
         discount_pct = min(int(discount_match.group(1)), 100) if discount_match else 0
         score_text = f"{int(deal_bot.score_deal(product, discount_pct, source_name))}/100"
     except Exception:
@@ -517,7 +517,7 @@ def _format_post(post, source):
             pass
 
     description = URL_RE.sub("", original)
-    description = re.sub(r"\\s+", " ", description).strip(" |\\n\\r-")
+    description = re.sub(r"\s+", " ", description).strip(" |\n\r-")
     if not description or description.lower() == product.lower():
         description = "Open the deal link to view current product details."
     description = description[:240].rstrip()
