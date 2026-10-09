@@ -26,7 +26,10 @@ log = logging.getLogger("zoner")
 # source-copy workers cannot both pass the public-channel check and then send.
 PUBLICATION_LOCK = asyncio.Lock()
 
+# Flipkart is intentionally first: eligible Flipkart deals outrank other sources.
+# Within each priority tier, the newest post is selected.
 DEFAULT_SOURCES = [
+    "https://t.me/Flipkartdj",
     "https://t.me/WomenOfferUpdates",
     "https://t.me/viratloot",
     "https://t.me/Meesho9loot",
@@ -459,6 +462,7 @@ def _discount(text):
 
 def _source_label(source):
     return {
+        "Flipkartdj": "Flipkart",
         "WomenOfferUpdates": "Women Offer Updates",
         "viratloot": "Virat Loot",
         "Meesho9loot": "Meesho Loot",
@@ -735,9 +739,15 @@ async def source_copy_loop(app):
                     if link and not _already_copied(bot, source, post["id"], link, post):
                         candidates.append((post.get("published_at"), source, post, link))
 
-            candidates.sort(
-                key=lambda item: item[0] or datetime.min.replace(tzinfo=timezone.utc)
-            )
+            def candidate_priority(item):
+                published_at, source, post, link = item
+                source_name = _username(source).lower()
+                # Flipkart always ranks first; newest wins within each tier.
+                source_rank = 0 if source_name == "flipkartdj" else 1
+                newest_first = -published_at.timestamp() if published_at else float("inf")
+                return (source_rank, newest_first, -int(post.get("id") or 0))
+
+            candidates.sort(key=candidate_priority)
 
             if candidates:
                 _, source, post, link = candidates[0]
