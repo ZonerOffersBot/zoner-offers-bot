@@ -1810,7 +1810,7 @@ def canonical_deal_url(value):
                     "utm_content", "utm_id", "igshid", "mc_cid", "mc_eid", "linkid"}
         query = sorted((k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
                        if k.lower() not in tracking and not k.lower().startswith("utm_"))
-        return urlunparse((scheme, host, (parsed.path or "").rstrip(""),
+        return urlunparse((scheme, host, (parsed.path or "").rstrip("/"),
                            "", urlencode(query, doseq=True), "")).lower().rstrip("/")
     except Exception:
         return str(value or "").strip().rstrip("/").lower()
