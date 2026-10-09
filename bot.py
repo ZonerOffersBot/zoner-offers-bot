@@ -133,6 +133,81 @@ def db():
     con.row_factory = sqlite3.Row
     return con
 
+
+def reserve_auto_publish_slot(owner, cooldown_seconds=900, lease_seconds=300):
+    """Atomically enforce one successful automatic post per 15-minute window
+    across the deal scanner and the public-channel source copier."""
+    now = time.time()
+    con = db()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS global_publish_schedule (
+                slot_id INTEGER PRIMARY KEY CHECK(slot_id=1),
+                last_published_at REAL NOT NULL DEFAULT 0,
+                lease_owner TEXT DEFAULT '',
+                lease_until REAL NOT NULL DEFAULT 0
+            )
+        """)
+        row = con.execute(
+            "SELECT last_published_at, lease_owner, lease_until "
+            "FROM global_publish_schedule WHERE slot_id=1"
+        ).fetchone()
+        if row:
+            if float(row["lease_until"] or 0) > now and row["lease_owner"] != owner:
+                con.rollback()
+                return False
+            if now - float(row["last_published_at"] or 0) < cooldown_seconds:
+                con.rollback()
+                return False
+        con.execute(
+            "INSERT INTO global_publish_schedule(slot_id,last_published_at,lease_owner,lease_until) "
+            "VALUES(1,0,?,?) ON CONFLICT(slot_id) DO UPDATE SET "
+            "lease_owner=excluded.lease_owner, lease_until=excluded.lease_until",
+            (str(owner), now + lease_seconds),
+        )
+        con.commit()
+        return True
+    except Exception:
+        con.rollback()
+        log.exception("Could not reserve global automatic-publish slot")
+        return False
+    finally:
+        con.close()
+
+
+def finish_auto_publish_slot(owner, success):
+    """Release the global publish lease and record only successful sends."""
+    con = db()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS global_publish_schedule (
+                slot_id INTEGER PRIMARY KEY CHECK(slot_id=1),
+                last_published_at REAL NOT NULL DEFAULT 0,
+                lease_owner TEXT DEFAULT '',
+                lease_until REAL NOT NULL DEFAULT 0
+            )
+        """)
+        if success:
+            con.execute(
+                "UPDATE global_publish_schedule SET last_published_at=?, "
+                "lease_owner='', lease_until=0 WHERE slot_id=1 AND lease_owner=?",
+                (time.time(), str(owner)),
+            )
+        else:
+            con.execute(
+                "UPDATE global_publish_schedule SET lease_owner='', lease_until=0 "
+                "WHERE slot_id=1 AND lease_owner=?",
+                (str(owner),),
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        log.exception("Could not finalize global automatic-publish slot")
+    finally:
+        con.close()
+
 def init_db():
     # Keep the SQLite file configurable so a persistent Render volume can be
     # attached later without changing bot code. Existing deployments continue
@@ -1911,7 +1986,7 @@ def format_publish_card(row):
     return "\n".join(lines)
 
 
-async def publish_offer(bot, row, allow_duplicate=False):
+async def _publish_offer_impl(bot, row, allow_duplicate=False):
     """Publish a cached deal with the real shopping-platform product image only."""
     if not allow_duplicate and url_already_published(row["url"], row["id"]):
         log.info("🚫 Duplicate publication blocked: %s", canonical_deal_url(row["url"]))
@@ -2035,6 +2110,26 @@ async def publish_offer(bot, row, allow_duplicate=False):
         log.info("📨 Queued %s subscriber notifications in background; publisher is not blocked", len(users))
 
     return channel_published
+
+
+async def publish_offer(bot, row, allow_duplicate=False):
+    """Use one shared 15-minute global slot for all automatic publishing.
+    Intentional admin republishing (allow_duplicate=True) remains manual and bypasses
+    the automatic cadence, while the URL duplicate rules still apply to auto posts."""
+    if allow_duplicate:
+        return await _publish_offer_impl(bot, row, allow_duplicate=True)
+
+    owner = "deal-scanner:" + str(row["id"])
+    if not reserve_auto_publish_slot(owner, cooldown_seconds=900):
+        log.info("⏳ Global publish cadence active; skipping automatic deal %s this cycle", row["id"])
+        return False
+
+    success = False
+    try:
+        success = await _publish_offer_impl(bot, row, allow_duplicate=False)
+        return success
+    finally:
+        finish_auto_publish_slot(owner, success)
 
 
 async def scan_and_publish(bot, manual=False):
