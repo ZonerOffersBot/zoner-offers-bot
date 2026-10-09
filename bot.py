@@ -2256,23 +2256,37 @@ async def scan_and_publish(bot, manual=False):
 
 
 async def auto_scan_loop(app):
-    """Single production publishing loop with a strict 15-minute cadence.
-
-    The runner starts only this loop. Production auto-publishing is locked to
-    900 seconds (15 minutes); the database cannot override this cadence.
-    """
+    """Automatic deal scanner sharing the global 15-minute publish limiter."""
     while True:
-        cycle_started = asyncio.get_running_loop().time()
         try:
+            # Do not run another scan while the global 15-minute publishing
+            # window is active. Recheck at most once a minute so a source-copy
+            # post cannot accidentally push the next automatic deal to 30 minutes.
+            con = db()
+            try:
+                row = con.execute(
+                    "SELECT last_published_at FROM global_publish_schedule WHERE slot_id=1"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                row = None
+            finally:
+                con.close()
+
+            last_published = float(row["last_published_at"] or 0) if row else 0.0
+            remaining = 900 - (time.time() - last_published)
+            if remaining > 0:
+                await asyncio.sleep(min(60, max(1, remaining)))
+                continue
+
             result = await scan_and_publish(app.bot)
             log.info("AI scan: %s", result.replace("\n", " | "))
+        except asyncio.CancelledError:
+            raise
         except Exception:
             log.exception("AI scan failed")
 
-        # STRICT PRODUCTION LOCK: auto-publishing is always every 15 minutes.
-        # Keep the persisted setting normalized to 900 so stale/admin values
-        # cannot change the production cadence.
-        interval = 900
+        # Normalize the admin-visible setting, but the shared DB limiter is
+        # authoritative across both the scanner and source-copy publisher.
         try:
             con = db()
             try:
@@ -2287,10 +2301,8 @@ async def auto_scan_loop(app):
             finally:
                 con.close()
         except Exception:
-            log.exception("Could not normalize post_interval; using strict 900-second cadence.")
-
-        elapsed = asyncio.get_running_loop().time() - cycle_started
-        await asyncio.sleep(max(1.0, interval - elapsed))
+            log.exception("Could not normalize post_interval to 900 seconds.")
+        await asyncio.sleep(60)
 
 
 async def add_menu_item(update, context):
