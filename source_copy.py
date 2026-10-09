@@ -35,11 +35,16 @@ DEFAULT_SOURCES = [
     "https://t.me/Meesho9loot",
     "https://t.me/Lootunboxing",
 ]
-SOURCE_CHANNELS = [
+CONFIGURED_SOURCES = [
     x.strip()
     for x in re.split(r"[,\n]+", os.getenv("SOURCE_CHANNELS", "").strip())
     if x.strip()
-] or DEFAULT_SOURCES
+]
+# Always monitor Flipkart even when Render has a custom SOURCE_CHANNELS value.
+SOURCE_CHANNELS = list(dict.fromkeys([
+    "https://t.me/Flipkartdj",
+    *(CONFIGURED_SOURCES or DEFAULT_SOURCES),
+]))
 
 COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {
     "0", "false", "off", "no"
