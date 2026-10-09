@@ -577,30 +577,62 @@ async def membership_status(bot, user_id):
 
 
 async def force_join_diagnostics(bot):
-    """Log exact required-channel configuration/permissions at startup."""
-    required = required_channel_ref()
-    if required.startswith(("https://", "http://", "t.me/")) or required.startswith("+"):
-        log.error("FORCE-JOIN CONFIG ERROR: CHANNEL_ID must be @username or numeric -100...; got %r", required)
-        return False
-    try:
-        chat = await asyncio.wait_for(bot.get_chat(required), timeout=8.0)
-        me = await asyncio.wait_for(bot.get_chat_member(chat.id, bot.id), timeout=8.0)
-        status = str(getattr(me, "status", "")).lower()
-        can_manage = getattr(me, "can_manage_chat", None)
-        log.info(
-            "Force-join self-test: ref=%s chat_id=%s title=%s bot_status=%s can_manage_chat=%s",
-            required, chat.id, getattr(chat, "title", "") or "", status, can_manage
-        )
-        if status not in {"administrator", "creator"}:
-            log.error("FORCE-JOIN PERMISSION ERROR: bot must be Administrator in %s", required)
-            return False
+    """Check bot admin access to every active force-join channel and log exact failures."""
+    channels = get_force_join_channels()
+    if not channels:
+        log.warning("FORCE-JOIN: no active required channels are configured.")
         return True
-    except Exception as exc:
-        log.error(
-            "FORCE-JOIN STARTUP CHECK FAILED ref=%s: %s (%s)",
-            required, exc, type(exc).__name__
-        )
-        return False
+
+    all_ok = True
+    for channel in channels:
+        required = str(channel["chat_ref"])
+        if required.startswith(("https://", "http://", "t.me/")) or required.startswith("+"):
+            log.error(
+                "FORCE-JOIN CONFIG ERROR: channel must be @username or numeric -100...; got %r",
+                required,
+            )
+            all_ok = False
+            continue
+
+        try:
+            chat = await asyncio.wait_for(bot.get_chat(required), timeout=8.0)
+            member = await asyncio.wait_for(
+                bot.get_chat_member(chat.id, bot.id), timeout=8.0
+            )
+            status = str(getattr(member, "status", "")).lower()
+            can_manage = getattr(member, "can_manage_chat", None)
+            can_post = getattr(member, "can_post_messages", None)
+            log.info(
+                "Force-join self-test: ref=%s chat_id=%s title=%s bot_status=%s "
+                "can_manage_chat=%s can_post_messages=%s",
+                required,
+                chat.id,
+                getattr(chat, "title", "") or "",
+                status,
+                can_manage,
+                can_post,
+            )
+            if status not in {"administrator", "creator"}:
+                log.error(
+                    "FORCE-JOIN PERMISSION ERROR: bot must be Administrator in %s (status=%s)",
+                    required,
+                    status,
+                )
+                all_ok = False
+        except Exception as exc:
+            log.error(
+                "FORCE-JOIN STARTUP CHECK FAILED ref=%s: %s (%s)",
+                required,
+                exc,
+                type(exc).__name__,
+            )
+            all_ok = False
+
+    if all_ok:
+        log.info("✅ Force-join diagnostics passed for all %s required channel(s).", len(channels))
+    else:
+        log.error("❌ Force-join diagnostics failed for one or more required channels.")
+    return all_ok
 
 def join_gate_markup():
     rows = []
