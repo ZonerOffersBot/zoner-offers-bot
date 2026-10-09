@@ -66,7 +66,7 @@ async def _patched_button_impl(update, context):
         except Exception:
             pass
         user_id = update.callback_query.from_user.id
-        if not bot.is_user_verified(user_id):
+        if not bot.is_admin(update) and not bot.is_user_verified(user_id):
             verified = await bot.membership_status(context.bot, user_id)
             if not verified:
                 await update.callback_query.edit_message_text(
@@ -79,13 +79,16 @@ async def _patched_button_impl(update, context):
         await _published_links(update, context)
         return
     if data == "admin_broadcast":
+        if not bot.is_admin(update):
+            try:
+                await update.callback_query.answer("Not authorized.", show_alert=True)
+            except Exception:
+                pass
+            return
         try:
             await update.callback_query.answer()
         except Exception:
             pass
-        if not bot.is_admin(update):
-            await update.callback_query.answer("Not authorized.", show_alert=True)
-            return
         con = bot.db()
         try:
             user_count = con.execute("SELECT COUNT(*) AS n FROM subscribers WHERE enabled=1").fetchone()["n"]
