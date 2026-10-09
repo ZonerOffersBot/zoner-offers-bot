@@ -537,7 +537,7 @@ def _format_post(post, source):
     if link:
         lines.extend(["", "🛒 BUY NOW", f"👉 {link}"])
     lines.extend(["", "@zoneroffers", "@offerleloturant"])
-    return "\\n".join(lines)[:4096]
+    return "\n".join(lines)[:4096]
 
 
 def _destinations(bot):
