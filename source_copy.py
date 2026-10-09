@@ -266,7 +266,7 @@ def _save_published_offer(bot, post, source):
 
     brand = _brand(original)
     discount_text = _discount(original)
-        discount_match = re.search(r"(\d{1,3})\s*%", discount_text or "")
+    discount_match = re.search(r"(\d{1,3})\s*%", discount_text or "")
     discount = min(int(discount_match.group(1)), 100) if discount_match else 0
     category = bot.guess_category(" ".join([title, original, brand, _username(source)]))
     source_name = _username(source) or "Telegram"
@@ -827,8 +827,15 @@ async def source_copy_loop(app):
                     # Claim immediately before Telegram send. Never release the
                     # claim on failure: a partial Telegram send must not be retried
                     # as a duplicate link.
-                    if not _claim_post(bot, source, post["id"], link, post):
+                    slot_owner = "source-copy:" + _username(source).lower() + ":" + str(post["id"])
+                    if not bot.reserve_auto_publish_slot(slot_owner, cooldown_seconds=900):
+                        log.info("⏳ Global 15-minute publish cadence active; source-copy candidate deferred: %s", _normalize_link(link))
                         continue
+
+                    if not _claim_post(bot, source, post["id"], link, post):
+                        bot.finish_auto_publish_slot(slot_owner, False)
+                        continue
+                    sent = False
                     try:
                         sent = await _send_post(bot, app, post, source)
                     except Exception:
@@ -837,6 +844,8 @@ async def source_copy_loop(app):
                             "⚠️ Source post processing failed; skipping without stopping publisher: @%s/%s",
                             _username(source), post["id"],
                         )
+                    finally:
+                        bot.finish_auto_publish_slot(slot_owner, sent)
 
                 if sent:
                     try:
