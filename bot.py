@@ -424,7 +424,7 @@ def score_deal(title, discount, source):
 MEMBERSHIP_CACHE_SECONDS = 0
 
 def get_force_join_channels():
-    """Return active admin-managed force-join channels."""
+    """Return active force-join channels, seeding the two official Zoner channels."""
     con = db()
     try:
         con.execute("""CREATE TABLE IF NOT EXISTS force_join_channels (
@@ -434,23 +434,31 @@ def get_force_join_channels():
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""")
-        rows = con.execute(
-            "SELECT chat_ref, title, invite_url FROM force_join_channels "
-            "WHERE enabled=1 ORDER BY created_at ASC"
-        ).fetchall()
-        if not rows:
-            # Seed the current legacy channel only once for existing deployments.
-            legacy = required_channel_ref_legacy()
+
+        # These are the two channels already configured for Zoner Offers publishing.
+        # Add them to the force-join list for existing databases without deleting
+        # any channels that an administrator has already configured.
+        defaults = [
+            ("@zoneroffers", "Zoner Offers", "https://t.me/zoneroffers"),
+            ("@offerleloturant", "Offer Le Loturant", "https://t.me/offerleloturant"),
+        ]
+        legacy = required_channel_ref_legacy()
+        legacy_url = required_channel_url_legacy()
+        if legacy not in {item[0] for item in defaults}:
+            defaults.append((legacy, legacy, legacy_url))
+
+        for ref, title, invite_url in defaults:
             con.execute(
-                "INSERT OR IGNORE INTO force_join_channels(chat_ref,title,invite_url,enabled) VALUES(?,?,?,1)",
-                (legacy, legacy, required_channel_url_legacy()),
+                "INSERT OR IGNORE INTO force_join_channels"
+                "(chat_ref,title,invite_url,enabled) VALUES(?,?,?,1)",
+                (ref, title, invite_url),
             )
-            con.commit()
-            rows = con.execute(
-                "SELECT chat_ref, title, invite_url FROM force_join_channels "
-                "WHERE enabled=1 ORDER BY created_at ASC"
-            ).fetchall()
-        return rows
+        con.commit()
+
+        return con.execute(
+            "SELECT chat_ref, title, invite_url FROM force_join_channels "
+            "WHERE enabled=1 ORDER BY created_at ASC, chat_ref ASC"
+        ).fetchall()
     finally:
         con.close()
 
