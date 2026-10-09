@@ -2465,7 +2465,8 @@ def run_health_server():
     HTTPServer(("0.0.0.0",port),HealthHandler).serve_forever()
 
 async def post_init(app):
-    app.create_task(auto_scan_loop(app))
+    # AI discovery and automatic AI deal publishing are disabled by request.
+    log.info("AI deal scanner/auto-publishing disabled.")
 
 def run_bot():
     if not TOKEN: raise RuntimeError("BOT_TOKEN environment variable is missing.")
