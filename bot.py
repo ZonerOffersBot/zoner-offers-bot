@@ -1708,8 +1708,8 @@ def get_cached_offer_for_publish():
                  o.id ASC
         LIMIT 1
     """).fetchone()
-    if row is None:
-        row = con.execute("SELECT * FROM offers ORDER BY id ASC LIMIT 1").fetchone()
+    # If every cached offer was published recently, wait for discovery instead
+    # of reusing an old link and creating duplicate posts every 15 minutes.
     con.close()
     return row
 
