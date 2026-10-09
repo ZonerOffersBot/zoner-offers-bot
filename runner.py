@@ -68,7 +68,7 @@ async def managed_post_stop(app):
             await task
         except asyncio.CancelledError:
             pass
-    log.info("✅ Legacy autonomous deal scanner remains disabled.")
+    log.info("✅ Publishing tasks stopped cleanly.")
 
 
 def build_app():
