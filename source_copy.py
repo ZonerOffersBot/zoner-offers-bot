@@ -467,76 +467,23 @@ def _source_label(source):
 
 
 def _format_post(post, source):
+    """Legacy ZONER OFFERS source-copy card; preserve the familiar post layout."""
     original = (post.get("text") or "").strip()
     product = _product_name(original)
     brand = _brand(original)
     price = _price(original)
-    discount_text = _discount(original)
+    discount = _discount(original)
     link = _first_url(original)
-    source_name = _source_label(source)
 
-    # Never guess a price: only bucket a numeric price explicitly present in source text.
-    price_range = "Not listed"
+    lines = ["🔥 ZONER OFFERS", "", f"🛍️ Product Name: {product}"]
+    if brand:
+        lines.append(f"🏷️ Brand: {brand}")
     if price:
-        numeric = re.sub(r"[^0-9.]", "", price.replace(",", ""))
-        try:
-            amount = float(numeric)
-            if amount <= 200:
-                price_range = "₹1–₹200"
-            elif amount <= 500:
-                price_range = "₹201–₹500"
-            elif amount <= 1000:
-                price_range = "₹501–₹1,000"
-            elif amount <= 2000:
-                price_range = "₹1,001–₹2,000"
-            elif amount <= 5000:
-                price_range = "₹2,001–₹5,000"
-            else:
-                price_range = "₹5,001+"
-        except (TypeError, ValueError):
-            price_range = "Not listed"
-
-    category = "Other"
-    score_text = "N/A"
-    try:
-        deal_bot = __import__("bot")
-        category = deal_bot.guess_category(" ".join([product, original, brand, source_name]))
-        discount_match = re.search(r"(\d{1,3})\s*%", discount_text or "")
-        discount_pct = min(int(discount_match.group(1)), 100) if discount_match else 0
-        score_text = f"{int(deal_bot.score_deal(product, discount_pct, source_name))}/100"
-    except Exception:
-        log.debug("Optional category/score formatting failed", exc_info=True)
-
-    website = "Not identified"
+        lines.append(f"💰 Price: {price}")
+    if discount:
+        lines.append(f"📉 Discount: {discount}")
     if link:
-        try:
-            website = (urlsplit(link).hostname or "").lower()
-            if website.startswith("www."):
-                website = website[4:]
-            website = website or "Not identified"
-        except Exception:
-            pass
-
-    description = URL_RE.sub("", original)
-    description = re.sub(r"\s+", " ", description).strip(" |\n\r-")
-    if not description or description.lower() == product.lower():
-        description = "Open the deal link to view current product details."
-    description = description[:240].rstrip()
-
-    lines = [
-        "🔥 ZONER OFFERS BOT",
-        "━━━━━━━━━━━━━━━━━━━━",
-        f"📂 Category: {category}",
-        f"🛍️ Product Name: {product}",
-        f"🏷️ Brand / Source: {brand or source_name}",
-        f"🏪 Shopping Website: {website}",
-        f"💰 Price Range: {price_range}",
-        f"📉 Discount: {discount_text or 'Not listed'}",
-        f"🎯 Deal Score: {score_text}",
-        f"📝 Description: {description}",
-    ]
-    if link:
-        lines.extend(["", "🛒 BUY NOW", f"👉 {link}"])
+        lines.extend(["", "🛒 Buy Now", f"👉 {link}"])
     lines.extend(["", "@zoneroffers", "@offerleloturant"])
     return "\n".join(lines)[:4096]
 
