@@ -1,7 +1,7 @@
 """
 Public Telegram deal-source copier for Zoner Offers.
 
-Four public sources, one formatted post every 5 minutes, 48-hour backlog,
+Four public sources, one formatted post every 15 minutes, 48-hour backlog,
 duplicate protection, image upload with text fallback, and destination
 permission diagnostics.
 """
@@ -41,7 +41,7 @@ SOURCE_CHANNELS = [
 COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {
     "0", "false", "off", "no"
 }
-COPY_INTERVAL = 300
+COPY_INTERVAL = 900  # Strict 15-minute source-copy publishing interval
 BACKLOG_HOURS = 48
 RUNTIME_LOCK_LEASE_SECONDS = 600
 RUNTIME_LOCK_OWNER = uuid.uuid4().hex
@@ -160,9 +160,35 @@ def _release_runtime_lock(bot):
 
 
 def _normalize_link(link):
-    """Normalize a URL for one-time publication protection."""
-    value = (link or "").strip()
-    return value.rstrip("/").lower() if value else ""
+    """Canonicalize deal URLs to block tracking-parameter and casing duplicates."""
+    value = html.unescape((link or "").strip()).strip(" \\t\\r\\n<>()[]{}.,;!\\\"'")
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        scheme = (parsed.scheme or "https").lower()
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return value.rstrip("/").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        port = parsed.port
+        netloc = host if not port or (scheme == "https" and port == 443) or (scheme == "http" and port == 80) else f"{host}:{port}"
+        tracking = {
+            "fbclid", "gclid", "dclid", "msclkid", "ref", "ref_", "tag",
+            "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+            "utm_id", "igshid", "mc_cid", "mc_eid", "linkid"
+        }
+        query = []
+        for key, val in parse_qsl(parsed.query, keep_blank_values=True):
+            if key.lower() in tracking or key.lower().startswith("utm_"):
+                continue
+            query.append((key, val))
+        query.sort()
+        path = (parsed.path or "").rstrip("/")
+        return urlunsplit((scheme, netloc, path, urlencode(query, doseq=True), "")).lower()
+    except Exception:
+        return value.rstrip("/").lower()
 
 def _public_channel_has_link(target, product_link):
     """Check the public Telegram preview for a link already published in a destination.
@@ -444,20 +470,74 @@ def _format_post(post, source):
     product = _product_name(original)
     brand = _brand(original)
     price = _price(original)
-    discount = _discount(original)
+    discount_text = _discount(original)
     link = _first_url(original)
+    source_name = _source_label(source)
 
-    lines = ["🔥 ZONER OFFERS", "", f"🛍️ Product Name: {product}"]
-    if brand:
-        lines.append(f"🏷️ Brand: {brand}")
+    # Never guess a price: only bucket a numeric price explicitly present in source text.
+    price_range = "Not listed"
     if price:
-        lines.append(f"💰 Price: {price}")
-    if discount:
-        lines.append(f"📉 Discount: {discount}")
+        numeric = re.sub(r"[^0-9.]", "", price.replace(",", ""))
+        try:
+            amount = float(numeric)
+            if amount <= 200:
+                price_range = "₹1–₹200"
+            elif amount <= 500:
+                price_range = "₹201–₹500"
+            elif amount <= 1000:
+                price_range = "₹501–₹1,000"
+            elif amount <= 2000:
+                price_range = "₹1,001–₹2,000"
+            elif amount <= 5000:
+                price_range = "₹2,001–₹5,000"
+            else:
+                price_range = "₹5,001+"
+        except (TypeError, ValueError):
+            price_range = "Not listed"
+
+    category = "Other"
+    score_text = "N/A"
+    try:
+        deal_bot = __import__("bot")
+        category = deal_bot.guess_category(" ".join([product, original, brand, source_name]))
+        discount_match = re.search(r"(\\d{1,3})\\s*%", discount_text or "")
+        discount_pct = min(int(discount_match.group(1)), 100) if discount_match else 0
+        score_text = f"{int(deal_bot.score_deal(product, discount_pct, source_name))}/100"
+    except Exception:
+        log.debug("Optional category/score formatting failed", exc_info=True)
+
+    website = "Not identified"
     if link:
-        lines.extend(["", "🛒 Buy Now", f"👉 {link}"])
+        try:
+            website = (urlsplit(link).hostname or "").lower()
+            if website.startswith("www."):
+                website = website[4:]
+            website = website or "Not identified"
+        except Exception:
+            pass
+
+    description = URL_RE.sub("", original)
+    description = re.sub(r"\\s+", " ", description).strip(" |\\n\\r-")
+    if not description or description.lower() == product.lower():
+        description = "Open the deal link to view current product details."
+    description = description[:240].rstrip()
+
+    lines = [
+        "🔥 ZONER OFFERS BOT",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"📂 Category: {category}",
+        f"🛍️ Product Name: {product}",
+        f"🏷️ Brand / Source: {brand or source_name}",
+        f"🏪 Shopping Website: {website}",
+        f"💰 Price Range: {price_range}",
+        f"📉 Discount: {discount_text or 'Not listed'}",
+        f"🎯 Deal Score: {score_text}",
+        f"📝 Description: {description}",
+    ]
+    if link:
+        lines.extend(["", "🛒 BUY NOW", f"👉 {link}"])
     lines.extend(["", "@zoneroffers", "@offerleloturant"])
-    return "\n".join(lines)[:4096]
+    return "\\n".join(lines)[:4096]
 
 
 def _destinations(bot):
