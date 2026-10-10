@@ -633,20 +633,9 @@ def _claim_post(bot, source, message_id, product_link="", post=None):
             con.rollback()
             return False
 
-        con.execute(
-            "INSERT INTO source_copy_history(source_channel, source_message_id, product_link) VALUES(?,?,?)",
-            (_username(source).lower(), str(message_id), normalized),
-        )
-        if normalized:
-            con.execute(
-                "INSERT INTO source_copy_link_history(product_link) VALUES(?)",
-                (normalized,),
-            )
-        if key:
-            con.execute(
-                "INSERT INTO source_copy_content_history(content_key) VALUES(?)",
-                (key,),
-            )
+        # Reserve only the exact link before sending. Do not mark the post as
+        # published until Telegram confirms at least one destination succeeded.
+        # This allows a failed send to be retried without permitting concurrent duplicates.
         con.commit()
         return True
     except Exception:
@@ -658,11 +647,26 @@ def _claim_post(bot, source, message_id, product_link="", post=None):
 
 
 def _release_claim(bot, source, message_id, product_link="", post=None):
-    # Never release a link claim. Telegram can partially succeed (one destination
-    # succeeds while another fails), and releasing here would allow the next cycle
-    # to publish the exact same link again. Duplicate prevention is higher priority
-    # than retrying a failed source post.
-    return
+    """Release a pre-send reservation only when every Telegram destination failed.
+
+    Successful/partial sends keep the durable duplicate guard. Failed sends remove
+    the reservation so the publisher can retry the post on a later cycle.
+    """
+    normalized = _normalize_link(product_link)
+    if not normalized:
+        return
+    con = bot.db()
+    try:
+        con.execute(
+            "DELETE FROM publication_guard WHERE normalized_link=? AND source_channel=? AND source_message_id=?",
+            (normalized, _username(source).lower(), str(message_id)),
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        log.exception("Could not release failed source-copy reservation")
+    finally:
+        con.close()
 
 
 async def _send_post(bot, app, post, source):
@@ -811,6 +815,15 @@ async def source_copy_loop(app):
                         )
                     finally:
                         bot.finish_auto_publish_slot(slot_owner, sent)
+
+                    if sent:
+                        # Commit durable duplicate history only after Telegram
+                        # confirms at least one destination accepted the post.
+                        _mark_copied(bot, source, post["id"], link, post)
+                    else:
+                        # All destinations failed: release the pre-send claim so
+                        # this deal can be retried and other sources remain eligible.
+                        _release_claim(bot, source, post["id"], link, post)
 
                 if sent:
                     try:
