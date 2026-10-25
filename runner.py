@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from threading import Thread
 
 import bot
@@ -16,12 +17,29 @@ from telegram.ext import (
 
 log = logging.getLogger("zoner")
 
+# Strict temporary publishing pause: 72 hours from 2026-10-26 01:57:05 IST.
+# UTC deadline: 2026-10-28 20:27:05 UTC. Persists across restarts/deploys.
+PUBLISH_PAUSE_UNTIL_UTC = datetime(2026, 10, 28, 20, 27, 5, tzinfo=timezone.utc)
+
 
 async def polling_error_handler(update, context):
     # Log polling/runtime exceptions only. Never inject unsolicited Telegram
     # messages into the user's normal UI flow.
     exc = context.error
     log.error("Telegram runtime error: %r", exc, exc_info=exc)
+
+
+async def _source_copy_after_pause(app):
+    remaining = (PUBLISH_PAUSE_UNTIL_UTC - datetime.now(timezone.utc)).total_seconds()
+    if remaining > 0:
+        log.warning(
+            "⏸️ STRICT AUTO-PUBLISH PAUSE active until %s UTC; resuming in %.0f seconds.",
+            PUBLISH_PAUSE_UNTIL_UTC.isoformat(),
+            remaining,
+        )
+        await asyncio.sleep(remaining)
+    log.warning("▶️ 72-hour pause ended; resuming legacy-format source-copy publishing.")
+    await source_copy.source_copy_loop(app)
 
 
 async def managed_post_init(app):
@@ -35,14 +53,15 @@ async def managed_post_init(app):
         log.exception("❌ Telegram startup check failed")
         raise
 
-    # AI auto-publishing is disabled; keep the legacy source-copy publisher active.
-    source_task = asyncio.create_task(source_copy.source_copy_loop(app), name="zoner-source-copy")
+    # AI publishing remains disabled. Legacy source-copy publishing is paused
+    # for 72 hours, then resumes automatically at the fixed deadline.
+    source_task = asyncio.create_task(_source_copy_after_pause(app), name="zoner-source-copy")
     app.bot_data["source_copy_task"] = source_task
     try:
         await bot.force_join_diagnostics(app.bot)
     except Exception:
-        log.exception("⚠️ Force-join diagnostics failed; publishers remain active")
-    log.info("✅ AI deal scanner disabled; legacy-format source-copy publisher started.")
+        log.exception("⚠️ Force-join diagnostics failed; publishers remain paused/managed.")
+    log.info("⏸️ Zoner auto-publishing pause scheduled; bot replies/admin functions remain available.")
 
 
 async def managed_post_stop(app):
