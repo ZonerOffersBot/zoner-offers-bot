@@ -73,17 +73,64 @@ async def _patched_button_impl(update, context):
         context.user_data.setdefault("instamart_order", {"items": []})
         await query.edit_message_text(
             "🛒 <b>INSTAMART ORDER ASSISTANT</b>\\n━━━━━━━━━━━━━━━━━━━━\\n\\n"
-            "Search products and place your real order on official Swiggy. You can keep a checklist here, but it will NOT sync into Swiggy's cart.\\n\\n"
-            "Final prices, stock, delivery and offers are shown by Swiggy for your location/account.",
+            "🎮 <b>FUN DEMO MODE — NOT A REAL SWIGGY ORDER</b>\\n\\n"
+            "Browse sample products, add them to a simulated cart, calculate an example discount, and preview a pretend checkout. No order or payment is sent.\\n\\n"
+            "Prices and offers below are fictional demo values. For real shopping, open official Instamart.",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔎 Open Instamart", url="https://www.swiggy.com/instamart")],
-                [InlineKeyboardButton("➕ Add items to checklist", callback_data="instamart_add")],
-                [InlineKeyboardButton("🛒 View checklist", callback_data="instamart_view")],
-                [InlineKeyboardButton("🧹 Clear checklist", callback_data="instamart_clear")],
+                [InlineKeyboardButton("🛍️ Browse Demo Products", callback_data="instamart_products")],
+                [InlineKeyboardButton("🧮 Instamart Calculator (Demo)", callback_data="instamart_calc")],
+                [InlineKeyboardButton("🛒 View Demo Cart", callback_data="instamart_view")],
+                [InlineKeyboardButton("🧹 Clear Cart", callback_data="instamart_clear")],
+                [InlineKeyboardButton("🔎 Open Official Instamart", url="https://www.swiggy.com/instamart")],
                 [InlineKeyboardButton("⬅️ Main Menu", callback_data="back")],
             ]),
         )
+        return
+    if data == "instamart_products":
+        context.user_data.setdefault("instamart_order", {"items": [], "cart": {}})
+        products = [("milk", "🥛 Milk 1L — ₹68"), ("bread", "🍞 Bread — ₹40"), ("eggs", "🥚 Eggs (6) — ₹55"), ("bananas", "🍌 Bananas — ₹45"), ("chips", "🍟 Chips — ₹30"), ("juice", "🧃 Juice — ₹90")]
+        rows = [[InlineKeyboardButton(label, callback_data=f"demo_add_{key}")] for key, label in products]
+        rows += [[InlineKeyboardButton("🛒 View Demo Cart", callback_data="instamart_view")],
+                 [InlineKeyboardButton("🧮 Discount Calculator", callback_data="instamart_calc")],
+                 [InlineKeyboardButton("⬅️ Order Menu", callback_data="instamart_order")]]
+        await query.edit_message_text("🛍️ <b>DEMO STORE CATALOG</b>\\n<i>Sample products/prices only — not live Swiggy inventory.</i>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
+        return
+    if data.startswith("demo_add_"):
+        catalog = {"milk": ("Milk 1L", 68), "bread": ("Bread", 40), "eggs": ("Eggs (6)", 55), "bananas": ("Bananas", 45), "chips": ("Chips", 30), "juice": ("Juice", 90)}
+        key = data[len("demo_add_"):]
+        if key in catalog:
+            state = context.user_data.setdefault("instamart_order", {"items": [], "cart": {}})
+            state.setdefault("cart", {})
+            name, price = catalog[key]
+            item = state["cart"].setdefault(key, {"name": name, "price": price, "qty": 0})
+            item["qty"] += 1
+            await query.answer(f"Demo cart: {name} × {item['qty']}")
+            await query.edit_message_text(f"✅ Added to <b>DEMO CART</b>: {name} × {item['qty']}\\nPrice: ₹{price} each\\n\\n<i>Simulation only; nothing added to Swiggy.</i>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Add more products", callback_data="instamart_products")],
+                [InlineKeyboardButton("🛒 View Demo Cart", callback_data="instamart_view")],
+                [InlineKeyboardButton("⬅️ Order Menu", callback_data="instamart_order")],
+            ]))
+        return
+    if data == "instamart_calc":
+        context.user_data.setdefault("instamart_order", {"items": [], "cart": {}})["step"] = "calc_total"
+        await query.edit_message_text("🧮 <b>INSTAMART DISCOUNT CALCULATOR — DEMO</b>\\n\\nSend your cart total in rupees (example: <code>649</code>).\\nDemo estimate: 10% off up to ₹100 on ₹499+; extra ₹50 off on ₹999+.\\n<i>Illustrative rules only, not verified or redeemable Swiggy offers.</i>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Order Menu", callback_data="instamart_order")]]))
+        return
+    if data == "instamart_checkout":
+        cart = context.user_data.get("instamart_order", {}).get("cart", {})
+        subtotal = sum(x["price"] * x["qty"] for x in cart.values())
+        if not cart:
+            await query.answer("Your demo cart is empty.", show_alert=True)
+            return
+        discount = min(100, int(subtotal * 0.10)) if subtotal >= 499 else 0
+        if subtotal >= 999:
+            discount += 50
+        total = max(0, subtotal - discount)
+        await query.edit_message_text("🎉 <b>DEMO CHECKOUT PREVIEW</b>\\n━━━━━━━━━━━━━━━━━━\\n🧾 Subtotal: ₹" + str(subtotal) + "\\n🎟️ Sample discount: −₹" + str(discount) + "\\n<b>Demo total: ₹" + str(total) + "</b>\\n\\n✅ Pretend checkout complete! <b>No real order was placed and no payment was taken.</b>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛍️ Continue Demo Shopping", callback_data="instamart_products")],
+            [InlineKeyboardButton("🔎 Open Official Instamart", url="https://www.swiggy.com/instamart")],
+            [InlineKeyboardButton("⬅️ Order Menu", callback_data="instamart_order")],
+        ]))
         return
     if data == "instamart_add":
         context.user_data.setdefault("instamart_order", {"items": []})
@@ -95,22 +142,23 @@ async def _patched_button_impl(update, context):
         )
         return
     if data == "instamart_view":
-        items = context.user_data.get("instamart_order", {}).get("items", [])
-        listing = "\\n".join("• " + __import__("html").escape(item) for item in items) or "Your checklist is empty."
-        await query.edit_message_text(
-            "🛒 <b>MY INSTAMART CHECKLIST</b>\\n\\n" + listing + "\\n\\nOpen official Swiggy to add these items to its real cart and pay.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚀 Open Instamart", url="https://www.swiggy.com/instamart")],
-                [InlineKeyboardButton("➕ Add more", callback_data="instamart_add")],
-                [InlineKeyboardButton("🧹 Clear", callback_data="instamart_clear")],
-                [InlineKeyboardButton("⬅️ Order menu", callback_data="instamart_order")],
-            ]),
-        )
+        state = context.user_data.get("instamart_order", {})
+        cart = state.get("cart", {})
+        listing = "\\n".join(f"• {item['name']} × {item['qty']} — ₹{item['price'] * item['qty']}" for item in cart.values())
+        subtotal = sum(item["price"] * item["qty"] for item in cart.values())
+        if not listing:
+            listing = "Your demo cart is empty."
+        await query.edit_message_text("🛒 <b>MY DEMO CART</b>\\n\\n" + listing + "\\n\\n<b>Demo subtotal: ₹" + str(subtotal) + "</b>\\n<i>Sample prices only. This cart is not connected to Swiggy.</i>", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛍️ Browse products", callback_data="instamart_products")],
+            [InlineKeyboardButton("🧮 Discount Calculator", callback_data="instamart_calc")],
+            [InlineKeyboardButton("🎉 Simulate Checkout", callback_data="instamart_checkout")],
+            [InlineKeyboardButton("🧹 Clear Cart", callback_data="instamart_clear")],
+            [InlineKeyboardButton("⬅️ Order menu", callback_data="instamart_order")],
+        ]))
         return
     if data == "instamart_clear":
-        context.user_data["instamart_order"] = {"items": []}
-        await query.edit_message_text("🧹 Checklist cleared.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Order menu", callback_data="instamart_order")]]))
+        context.user_data["instamart_order"] = {"items": [], "cart": {}}
+        await query.edit_message_text("🧹 Demo cart cleared.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Order menu", callback_data="instamart_order")]]))
         return
     if data == "published_links":
         user_id = query.from_user.id
@@ -160,6 +208,24 @@ async def instamart_order_input(update, context):
         return
     text = update.message.text.strip()
     if text.startswith("/"):
+        return
+    if state.get("step") == "calc_total":
+        try:
+            subtotal = float(text.replace("₹", "").replace(",", "").strip())
+            if subtotal < 0 or subtotal > 1000000:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("Please send a valid cart total, e.g. 649.")
+            return
+        discount = min(100, int(subtotal * 0.10)) if subtotal >= 499 else 0
+        if subtotal >= 999:
+            discount += 50
+        state["step"] = ""
+        await update.message.reply_text("🧮 INSTAMART CALCULATOR — DEMO RESULT\\n━━━━━━━━━━━━━━━━━━\\n" + f"Cart total: ₹{subtotal:.0f}\\nSample discount: ₹{discount}\\nEstimated demo total: ₹{max(0, subtotal-discount):.0f}\\n\\n⚠️ Illustrative rules only; not a live or redeemable Swiggy offer.", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛍️ Browse Demo Products", callback_data="instamart_products")],
+            [InlineKeyboardButton("🧮 Calculate Again", callback_data="instamart_calc")],
+            [InlineKeyboardButton("⬅️ Order Menu", callback_data="instamart_order")],
+        ]))
         return
     lines = [line.strip(" •-\\t") for line in text.splitlines() if line.strip(" •-\\t")]
     if not lines:
