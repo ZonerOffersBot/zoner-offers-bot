@@ -3,10 +3,11 @@
 import asyncio
 import bot
 import runner
+import instamart_calculator
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter
-from telegram.ext import CommandHandler
+from telegram.ext import CommandHandler, MessageHandler, filters
 
 
 def _patched_main_menu(user_id=None):
@@ -16,6 +17,7 @@ def _patched_main_menu(user_id=None):
         ("📚 Published Links", "published_links"),
         ("🏷️ Categories", "categories"),
         ("💰 Price Filter", "price_filter"),
+        ("🧮 Instamart Calculator", "instamart_calc"),
         (notify, "notifications"),
         ("🤖 AI Deal Hunter", "ai_info"),
         ("🆘 Help", "help"),
@@ -59,13 +61,35 @@ _original_button_impl = bot._button_handler_impl
 
 
 async def _patched_button_impl(update, context):
-    data = update.callback_query.data
-    if data == "published_links":
-        user_id = update.callback_query.from_user.id
+    query = update.callback_query
+    data = query.data
+    if data == "instamart_calc":
+        user_id = query.from_user.id
         if not bot.is_user_verified(user_id):
             verified = await bot.membership_status(context.bot, user_id)
             if not verified:
-                await update.callback_query.edit_message_text(
+                await query.edit_message_text(
+                    bot.join_gate_text(),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=bot.join_gate_markup(),
+                )
+                return
+            bot.mark_user_verified(user_id)
+        context.user_data["instamart_calc"] = {"step": "cart", "values": {}}
+        await query.edit_message_text(
+            "🧮 <b>Instamart ₹300 Discount Calculator</b>\n\n"
+            "Step 1/4: Enter your cart total in rupees (example: <code>599</code>).\n\n"
+            "<i>This estimates only; it does not verify or apply a Swiggy offer.</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Cancel / Main Menu", callback_data="back")]]),
+        )
+        return
+    if data == "published_links":
+        user_id = query.from_user.id
+        if not bot.is_user_verified(user_id):
+            verified = await bot.membership_status(context.bot, user_id)
+            if not verified:
+                await query.edit_message_text(
                     bot.join_gate_text(),
                     parse_mode=ParseMode.HTML,
                     reply_markup=bot.join_gate_markup(),
@@ -76,14 +100,14 @@ async def _patched_button_impl(update, context):
         return
     if data == "admin_broadcast":
         if not bot.is_admin(update):
-            await update.callback_query.answer("Not authorized.", show_alert=True)
+            await query.answer("Not authorized.", show_alert=True)
             return
         con = bot.db()
         try:
             user_count = con.execute("SELECT COUNT(*) AS n FROM subscribers WHERE enabled=1").fetchone()["n"]
         finally:
             con.close()
-        await update.callback_query.edit_message_text(
+        await query.edit_message_text(
             "📝 <b>BROADCAST CENTER</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             f"👥 Active recipients: <b>{user_count}</b>\n\n"
@@ -99,6 +123,99 @@ async def _patched_button_impl(update, context):
 
 
 bot._button_handler_impl = _patched_button_impl
+
+
+async def instamart_calculator_input(update, context):
+    """Handle calculator replies only while this user is in the calculator flow."""
+    state = context.user_data.get("instamart_calc")
+    if not state or not update.message or not update.message.text:
+        return
+
+    step = state.get("step")
+    values = state.setdefault("values", {})
+    text = update.message.text.strip()
+
+    prompts = {
+        "cart": "Step 1/4: Enter cart total in rupees (example: 599).",
+        "minimum": "Step 2/4: Enter the offer's minimum order value in rupees.",
+        "maximum": "Step 3/4: Enter the offer's maximum discount in rupees (up to 300 for this calculator).",
+    }
+
+    if step in ("cart", "minimum", "maximum"):
+        try:
+            amount = instamart_calculator.parse_rupees(text)
+        except (TypeError, ValueError):
+            await update.message.reply_text("Please enter a valid non-negative amount, such as 599 or 499.50.")
+            await update.message.reply_text(prompts[step])
+            return
+
+        if step == "cart":
+            values["cart_total"] = amount
+            state["step"] = "minimum"
+        elif step == "minimum":
+            values["minimum_order"] = amount
+            state["step"] = "maximum"
+        else:
+            values["maximum_discount"] = amount
+            state["step"] = "eligible"
+
+        if state["step"] == "eligible":
+            await update.message.reply_text(
+                "Step 4/4: Does the official Swiggy app show this offer as eligible for your cart? Reply <code>yes</code> or <code>no</code>.",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await update.message.reply_text(prompts[state["step"]])
+        return
+
+    if step == "eligible":
+        answer = text.lower()
+        if answer not in ("y", "yes", "n", "no"):
+            await update.message.reply_text("Please reply only yes or no. Does the official app show the offer as eligible?")
+            return
+
+        result = instamart_calculator.calculate(
+            cart_total=values["cart_total"],
+            minimum_order=values["minimum_order"],
+            maximum_discount=values["maximum_discount"],
+            offer_eligible=answer in ("y", "yes"),
+        )
+        lines = [
+            "🧮 <b>INSTAMART CALCULATION</b>",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"🛒 Cart total: <b>₹{result['cart_total']:.2f}</b>",
+            f"📌 Minimum order: <b>₹{result['minimum_order']:.2f}</b>",
+            f"🏷️ Requested discount: <b>₹{result['requested_discount']:.2f}</b>",
+            f"🔒 Maximum discount entered: <b>₹{result['maximum_discount']:.2f}</b>",
+            f"💸 Calculated discount: <b>₹{result['calculated_discount']:.2f}</b>",
+            f"🧾 Estimated payable: <b>₹{result['calculated_payable']:.2f}</b>",
+            "",
+            "Local calculation: " + ("<b>PASS</b>" if result["eligible_in_local_test"] else "<b>FAIL</b>"),
+        ]
+        if result["validation_errors"]:
+            lines.append("")
+            lines.extend("• " + __import__("html").escape(error) for error in result["validation_errors"])
+        lines.extend([
+            "",
+            "⚠️ <i>Estimate only. Zoner does not connect to Swiggy's offer system. Verify the coupon and final payable amount in the official app checkout.</i>",
+        ])
+        context.user_data.pop("instamart_calc", None)
+        await update.message.reply_text(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧮 Calculate Again", callback_data="instamart_calc")],
+                                               [InlineKeyboardButton("⬅️ Main Menu", callback_data="back")]]),
+        )
+
+
+_original_build_app = runner.build_app
+
+
+def build_app():
+    app = _original_build_app()
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, instamart_calculator_input), group=0)
+    return app
 
 
 async def broadcast_command(update, context):
@@ -150,7 +267,6 @@ async def broadcast_command(update, context):
             failed += 1
             bot.log.warning("Broadcast failed for %s: %s", chat_id, exc)
 
-        # Small pacing gap prevents a large subscriber list from hitting Telegram's rate limit.
         await asyncio.sleep(0.05)
 
     await update.message.reply_text(
@@ -163,15 +279,6 @@ async def broadcast_command(update, context):
         parse_mode=ParseMode.HTML,
         reply_markup=bot.admin_menu(),
     )
-
-
-_original_build_app = runner.build_app
-
-
-def build_app():
-    app = _original_build_app()
-    app.add_handler(CommandHandler("broadcast", broadcast_command))
-    return app
 
 
 runner.build_app = build_app
