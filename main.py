@@ -204,7 +204,7 @@ bot._button_handler_impl = _patched_button_impl
 async def instamart_order_input(update, context):
     """Collect checklist text only while the user is in the add-items flow."""
     state = context.user_data.get("instamart_order")
-    if not state or state.get("step") != "add_items" or not update.message or not update.message.text:
+    if not state or state.get("step") not in ("add_items", "calc_total") or not update.message or not update.message.text:
         return
     text = update.message.text.strip()
     if text.startswith("/"):
