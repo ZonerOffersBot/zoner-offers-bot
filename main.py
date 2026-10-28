@@ -3,7 +3,6 @@
 import asyncio
 import bot
 import runner
-import instamart_calculator
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter
@@ -17,7 +16,7 @@ def _patched_main_menu(user_id=None):
         ("📚 Published Links", "published_links"),
         ("🏷️ Categories", "categories"),
         ("💰 Price Filter", "price_filter"),
-        ("🧮 Instamart Calculator", "instamart_calc"),
+        ("🛒 Instamart Order", "instamart_order"),
         (notify, "notifications"),
         ("🤖 AI Deal Hunter", "ai_info"),
         ("🆘 Help", "help"),
@@ -63,26 +62,55 @@ _original_button_impl = bot._button_handler_impl
 async def _patched_button_impl(update, context):
     query = update.callback_query
     data = query.data
-    if data == "instamart_calc":
+    if data == "instamart_order":
         user_id = query.from_user.id
         if not bot.is_user_verified(user_id):
             verified = await bot.membership_status(context.bot, user_id)
             if not verified:
-                await query.edit_message_text(
-                    bot.join_gate_text(),
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=bot.join_gate_markup(),
-                )
+                await query.edit_message_text(bot.join_gate_text(), parse_mode=ParseMode.HTML, reply_markup=bot.join_gate_markup())
                 return
             bot.mark_user_verified(user_id)
-        context.user_data["instamart_calc"] = {"step": "cart", "values": {}}
+        context.user_data.setdefault("instamart_order", {"items": []})
         await query.edit_message_text(
-            "🧮 <b>Instamart ₹300 Discount Calculator</b>\n\n"
-            "Step 1/4: Enter your cart total in rupees (example: <code>599</code>).\n\n"
-            "<i>This estimates only; it does not verify or apply a Swiggy offer.</i>",
+            "🛒 <b>INSTAMART ORDER ASSISTANT</b>\\n━━━━━━━━━━━━━━━━━━━━\\n\\n"
+            "Search products and place your real order on official Swiggy. You can keep a checklist here, but it will NOT sync into Swiggy's cart.\\n\\n"
+            "Final prices, stock, delivery and offers are shown by Swiggy for your location/account.",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Cancel / Main Menu", callback_data="back")]]),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔎 Open Instamart", url="https://www.swiggy.com/instamart")],
+                [InlineKeyboardButton("➕ Add items to checklist", callback_data="instamart_add")],
+                [InlineKeyboardButton("🛒 View checklist", callback_data="instamart_view")],
+                [InlineKeyboardButton("🧹 Clear checklist", callback_data="instamart_clear")],
+                [InlineKeyboardButton("⬅️ Main Menu", callback_data="back")],
+            ]),
         )
+        return
+    if data == "instamart_add":
+        context.user_data.setdefault("instamart_order", {"items": []})
+        context.user_data["instamart_order"]["step"] = "add_items"
+        await query.edit_message_text(
+            "➕ <b>Add products</b>\\n\\nSend product names and quantities, one per line. Example:\\n<code>Milk 1 litre x 2\\nBread x 1</code>\\n\\nThis is a checklist, not a live Swiggy cart.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Order menu", callback_data="instamart_order")]]),
+        )
+        return
+    if data == "instamart_view":
+        items = context.user_data.get("instamart_order", {}).get("items", [])
+        listing = "\\n".join("• " + __import__("html").escape(item) for item in items) or "Your checklist is empty."
+        await query.edit_message_text(
+            "🛒 <b>MY INSTAMART CHECKLIST</b>\\n\\n" + listing + "\\n\\nOpen official Swiggy to add these items to its real cart and pay.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Open Instamart", url="https://www.swiggy.com/instamart")],
+                [InlineKeyboardButton("➕ Add more", callback_data="instamart_add")],
+                [InlineKeyboardButton("🧹 Clear", callback_data="instamart_clear")],
+                [InlineKeyboardButton("⬅️ Order menu", callback_data="instamart_order")],
+            ]),
+        )
+        return
+    if data == "instamart_clear":
+        context.user_data["instamart_order"] = {"items": []}
+        await query.edit_message_text("🧹 Checklist cleared.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Order menu", callback_data="instamart_order")]]))
         return
     if data == "published_links":
         user_id = query.from_user.id
@@ -125,87 +153,29 @@ async def _patched_button_impl(update, context):
 bot._button_handler_impl = _patched_button_impl
 
 
-async def instamart_calculator_input(update, context):
-    """Handle calculator replies only while this user is in the calculator flow."""
-    state = context.user_data.get("instamart_calc")
-    if not state or not update.message or not update.message.text:
+async def instamart_order_input(update, context):
+    """Collect checklist text only while the user is in the add-items flow."""
+    state = context.user_data.get("instamart_order")
+    if not state or state.get("step") != "add_items" or not update.message or not update.message.text:
         return
-
-    step = state.get("step")
-    values = state.setdefault("values", {})
     text = update.message.text.strip()
-
-    prompts = {
-        "cart": "Step 1/4: Enter cart total in rupees (example: 599).",
-        "minimum": "Step 2/4: Enter the offer's minimum order value in rupees.",
-        "maximum": "Step 3/4: Enter the offer's maximum discount in rupees (up to 300 for this calculator).",
-    }
-
-    if step in ("cart", "minimum", "maximum"):
-        try:
-            amount = instamart_calculator.parse_rupees(text)
-        except (TypeError, ValueError):
-            await update.message.reply_text("Please enter a valid non-negative amount, such as 599 or 499.50.")
-            await update.message.reply_text(prompts[step])
-            return
-
-        if step == "cart":
-            values["cart_total"] = amount
-            state["step"] = "minimum"
-        elif step == "minimum":
-            values["minimum_order"] = amount
-            state["step"] = "maximum"
-        else:
-            values["maximum_discount"] = amount
-            state["step"] = "eligible"
-
-        if state["step"] == "eligible":
-            await update.message.reply_text(
-                "Step 4/4: Does the official Swiggy app show this offer as eligible for your cart? Reply <code>yes</code> or <code>no</code>.",
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            await update.message.reply_text(prompts[state["step"]])
+    if text.startswith("/"):
         return
-
-    if step == "eligible":
-        answer = text.lower()
-        if answer not in ("y", "yes", "n", "no"):
-            await update.message.reply_text("Please reply only yes or no. Does the official app show the offer as eligible?")
-            return
-
-        result = instamart_calculator.calculate(
-            cart_total=values["cart_total"],
-            minimum_order=values["minimum_order"],
-            maximum_discount=values["maximum_discount"],
-            offer_eligible=answer in ("y", "yes"),
-        )
-        lines = [
-            "🧮 <b>INSTAMART CALCULATION</b>",
-            "━━━━━━━━━━━━━━━━━━━━",
-            f"🛒 Cart total: <b>₹{result['cart_total']:.2f}</b>",
-            f"📌 Minimum order: <b>₹{result['minimum_order']:.2f}</b>",
-            f"🏷️ Requested discount: <b>₹{result['requested_discount']:.2f}</b>",
-            f"🔒 Maximum discount entered: <b>₹{result['maximum_discount']:.2f}</b>",
-            f"💸 Calculated discount: <b>₹{result['calculated_discount']:.2f}</b>",
-            f"🧾 Estimated payable: <b>₹{result['calculated_payable']:.2f}</b>",
-            "",
-            "Local calculation: " + ("<b>PASS</b>" if result["eligible_in_local_test"] else "<b>FAIL</b>"),
-        ]
-        if result["validation_errors"]:
-            lines.append("")
-            lines.extend("• " + __import__("html").escape(error) for error in result["validation_errors"])
-        lines.extend([
-            "",
-            "⚠️ <i>Estimate only. Zoner does not connect to Swiggy's offer system. Verify the coupon and final payable amount in the official app checkout.</i>",
-        ])
-        context.user_data.pop("instamart_calc", None)
-        await update.message.reply_text(
-            "\n".join(lines),
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧮 Calculate Again", callback_data="instamart_calc")],
-                                               [InlineKeyboardButton("⬅️ Main Menu", callback_data="back")]]),
-        )
+    lines = [line.strip(" •-\\t") for line in text.splitlines() if line.strip(" •-\\t")]
+    if not lines:
+        await update.message.reply_text("Send product names and quantities, one per line.")
+        return
+    state.setdefault("items", []).extend(lines[:30])
+    state["step"] = ""
+    await update.message.reply_text(
+        "✅ Added to your checklist.\\n\\n" + "\\n".join("• " + line for line in lines[:30]) +
+        "\\n\\nThis is not synced to Swiggy. Open the official Instamart page to place the real order.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛒 View checklist", callback_data="instamart_view")],
+            [InlineKeyboardButton("🚀 Open Instamart", url="https://www.swiggy.com/instamart")],
+            [InlineKeyboardButton("⬅️ Main Menu", callback_data="back")],
+        ]),
+    )
 
 
 _original_build_app = runner.build_app
@@ -214,7 +184,7 @@ _original_build_app = runner.build_app
 def build_app():
     app = _original_build_app()
     app.add_handler(CommandHandler("broadcast", broadcast_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, instamart_calculator_input), group=0)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, instamart_order_input), group=0)
     return app
 
 
