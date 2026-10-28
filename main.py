@@ -10,26 +10,11 @@ from telegram.ext import CommandHandler, MessageHandler, filters
 
 
 def _patched_main_menu(user_id=None):
-    notify = "🔔 Notifications ON" if user_id is not None and bot.subscriber_enabled(user_id) else "🔕 Notifications OFF"
-    items = [
-        ("🛍️ Latest Deals", "offers"),
-        ("📚 Published Links", "published_links"),
-        ("🏷️ Categories", "categories"),
-        ("💰 Price Filter", "price_filter"),
-        ("🛒 Instamart Order", "instamart_order"),
-        (notify, "notifications"),
-        ("🤖 AI Deal Hunter", "ai_info"),
-        ("🆘 Help", "help"),
-    ]
-    try:
-        max_per_row = max(1, min(3, int(bot.get_setting_sync("menu_buttons_per_row", 2))))
-    except (TypeError, ValueError):
-        max_per_row = 2
-    rows = []
-    for i in range(0, len(items), max_per_row):
-        rows.append([InlineKeyboardButton(label, callback_data=cb) for label, cb in items[i:i + max_per_row]])
-    return InlineKeyboardMarkup(rows)
-
+    # User-facing menu intentionally shows only the clearly labelled demo store.
+    # Existing handlers/admin features remain registered and unchanged.
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛍️ Swiggy Instamart Demo", callback_data="instamart_order")],
+    ])
 
 bot.main_menu = _patched_main_menu
 
