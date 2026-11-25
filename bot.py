@@ -871,6 +871,7 @@ def admin_menu():
         [InlineKeyboardButton("🛒 Add Product", callback_data="admin_addproduct"),
          InlineKeyboardButton("🟣 Re-publish Vault", callback_data="admin_republish")],
         [InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
+        [InlineKeyboardButton("🧰 Extra Admin Tools", callback_data="admin_tools")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
          InlineKeyboardButton("🤖 Scan Now", callback_data="admin_scan")],
         [InlineKeyboardButton("🧪 Test Channels", callback_data="admin_testchannels"),
