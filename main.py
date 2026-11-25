@@ -1,6 +1,10 @@
 """Stable production entry point for Zoner Offers Bot."""
 # ZONER_BROADCAST_FIX_2026_10_06
 import asyncio
+import os
+import sqlite3
+import tempfile
+from datetime import datetime, timezone
 import bot
 import runner
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -183,6 +187,158 @@ async def _patched_button_impl(update, context):
             reply_markup=bot.admin_menu(),
         )
         return
+    if data.startswith("admin_") and data in {
+        "admin_tools", "admin_health", "admin_analytics", "admin_backup", "admin_audience"
+    }:
+        if not bot.is_admin(update):
+            await query.answer("Not authorized.", show_alert=True)
+            return
+
+        if data == "admin_tools":
+            await query.edit_message_text(
+                "🧰 <b>EXTRA ADMIN TOOLS</b>\\n━━━━━━━━━━━━━━━━━━━━\\n"
+                "Choose a control:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🩺 System Diagnostics", callback_data="admin_health")],
+                    [InlineKeyboardButton("📈 Publishing Analytics", callback_data="admin_analytics")],
+                    [InlineKeyboardButton("💾 Download DB Backup", callback_data="admin_backup")],
+                    [InlineKeyboardButton("👥 Audience Overview", callback_data="admin_audience")],
+                    [InlineKeyboardButton("⬅️ Admin Panel", callback_data="admin_panel")],
+                ]),
+            )
+            return
+
+        if data == "admin_health":
+            checks = []
+            try:
+                con = bot.db()
+                integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
+                table_count = con.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                ).fetchone()[0]
+                offer_count = con.execute("SELECT COUNT(*) FROM offers").fetchone()[0]
+                subscriber_count = con.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
+                con.close()
+                checks.append(f"🗄️ Database: <b>{'OK' if integrity == 'ok' else 'CHECK'}</b>")
+                checks.append(f"📚 Tables: <b>{table_count}</b>")
+                checks.append(f"🛍️ Offers: <b>{offer_count}</b>")
+                checks.append(f"👥 Subscribers: <b>{subscriber_count}</b>")
+                checks.append(f"📁 DB path configured: <code>{'YES' if os.path.exists(bot.DB_FILE) else 'NO'}</code>")
+            except Exception as exc:
+                checks.append(f"❌ Database: <code>{type(exc).__name__}: {str(exc)[:180]}</code>")
+            checks.append(f"⏱️ Publish interval: <b>{bot.SCAN_SECONDS}s (5 min target)</b>")
+            for target in bot.POST_CHANNELS:
+                try:
+                    chat = await context.bot.get_chat(target)
+                    member = await context.bot.get_chat_member(chat.id, context.bot.id)
+                    rights = getattr(member, "can_post_messages", None)
+                    status = getattr(member, "status", "unknown")
+                    checks.append(f"📣 <code>{target}</code>: <b>{status}</b> · can post <b>{rights}</b>")
+                except Exception as exc:
+                    checks.append(f"⚠️ <code>{target}</code>: <code>{type(exc).__name__}</code>")
+            await query.edit_message_text(
+                "🩺 <b>SYSTEM DIAGNOSTICS</b>\\n━━━━━━━━━━━━━━━━━━━━\\n" + "\\n".join(checks),
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Run Again", callback_data="admin_health")],
+                    [InlineKeyboardButton("⬅️ Extra Tools", callback_data="admin_tools")],
+                ]),
+            )
+            return
+
+        if data == "admin_analytics":
+            con = bot.db()
+            try:
+                today = con.execute(
+                    "SELECT COUNT(*) FROM published_links WHERE date(published_at)=date('now')"
+                ).fetchone()[0]
+                last7 = con.execute(
+                    "SELECT COUNT(*) FROM published_links WHERE datetime(published_at)>=datetime('now','-7 days')"
+                ).fetchone()[0]
+                total = con.execute("SELECT COUNT(*) FROM published_links").fetchone()[0]
+                by_channel = con.execute(
+                    "SELECT chat_id, COUNT(*) AS n FROM published_links GROUP BY chat_id ORDER BY n DESC LIMIT 5"
+                ).fetchall()
+                by_source = con.execute(
+                    "SELECT COALESCE(source,'Unknown') AS source, COUNT(*) AS n FROM offers GROUP BY source ORDER BY n DESC LIMIT 5"
+                ).fetchall()
+            finally:
+                con.close()
+            channel_lines = [f"• <code>{str(r['chat_id'])}</code>: {r['n']}" for r in by_channel] or ["• No channel records yet"]
+            source_lines = [f"• {str(r['source'])[:35]}: {r['n']}" for r in by_source] or ["• No source records yet"]
+            await query.edit_message_text(
+                "📈 <b>PUBLISHING ANALYTICS</b>\\n━━━━━━━━━━━━━━━━━━━━\\n"
+                f"📅 Today (UTC): <b>{today}</b>\\n"
+                f"🗓️ Last 7 days: <b>{last7}</b>\\n"
+                f"📢 All-time link records: <b>{total}</b>\\n\\n"
+                "<b>Top destination records</b>\\n" + "\\n".join(channel_lines) +
+                "\\n\\n<b>Top saved offer sources</b>\\n" + "\\n".join(source_lines),
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Refresh", callback_data="admin_analytics")],
+                    [InlineKeyboardButton("⬅️ Extra Tools", callback_data="admin_tools")],
+                ]),
+            )
+            return
+
+        if data == "admin_backup":
+            source = sqlite3.connect(bot.DB_FILE)
+            temp = tempfile.NamedTemporaryFile(prefix="zoner-backup-", suffix=".sqlite3", delete=False)
+            temp_path = temp.name
+            temp.close()
+            try:
+                destination = sqlite3.connect(temp_path)
+                source.backup(destination)
+                destination.close()
+            finally:
+                source.close()
+            try:
+                with open(temp_path, "rb") as backup_file:
+                    await context.bot.send_document(
+                        chat_id=query.from_user.id,
+                        document=backup_file,
+                        filename=f"zoner-offers-backup-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.sqlite3",
+                        caption="💾 Zoner Offers database backup. Keep this file private.",
+                    )
+                await query.answer("Backup sent to your private chat.")
+            except Exception as exc:
+                await query.answer(f"Backup failed: {type(exc).__name__}", show_alert=True)
+            finally:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            return
+
+        if data == "admin_audience":
+            con = bot.db()
+            try:
+                total = con.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
+                on = con.execute("SELECT COUNT(*) FROM subscribers WHERE enabled=1").fetchone()[0]
+                off = total - on
+                verified = con.execute("SELECT COUNT(*) FROM verified_users").fetchone()[0]
+                groups = con.execute(
+                    "SELECT COUNT(*) FROM auto_publish_chats WHERE enabled=1"
+                ).fetchone()[0]
+            finally:
+                con.close()
+            await query.edit_message_text(
+                "👥 <b>AUDIENCE OVERVIEW</b>\\n━━━━━━━━━━━━━━━━━━━━\\n"
+                f"👤 Registered users: <b>{total}</b>\\n"
+                f"🔔 Notifications ON: <b>{on}</b>\\n"
+                f"🔕 Notifications OFF: <b>{off}</b>\\n"
+                f"✅ Verified users: <b>{verified}</b>\\n"
+                f"👥 Active registered groups: <b>{groups}</b>\\n\\n"
+                "Only aggregate counts are shown here; no user IDs are exposed.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Refresh", callback_data="admin_audience")],
+                    [InlineKeyboardButton("⬅️ Extra Tools", callback_data="admin_tools")],
+                ]),
+            )
+            return
+
     return await _original_button_impl(update, context)
 
 
