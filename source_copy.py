@@ -1,7 +1,7 @@
 """
 Public Telegram deal-source copier for Zoner Offers.
 
-Four public sources, one formatted post every 15 minutes, 48-hour backlog,
+Four public sources, one formatted post every 5 minutes, 48-hour backlog,
 duplicate protection, image upload with text fallback, and destination
 permission diagnostics.
 """
@@ -52,7 +52,7 @@ SOURCE_CHANNELS = [
 COPY_ENABLED = os.getenv("SOURCE_COPY_ENABLED", "1").strip().lower() not in {
     "0", "false", "off", "no"
 }
-COPY_INTERVAL = 900  # Strict 15-minute source-copy publishing interval
+COPY_INTERVAL = 300  # Strict 5-minute source-copy publishing interval
 BACKLOG_HOURS = 48
 RUNTIME_LOCK_LEASE_SECONDS = 600
 RUNTIME_LOCK_OWNER = uuid.uuid4().hex
@@ -757,7 +757,8 @@ async def source_copy_loop(app):
                 # Flipkart always ranks first; newest wins within each tier.
                 source_rank = 0 if source_name == "flipkartdj" else 1
                 newest_first = -published_at.timestamp() if published_at else float("inf")
-                return (source_rank, newest_first, -int(post.get("id") or 0))
+                # Freshness is the primary ranking; Flipkart wins ties.
+                return (newest_first, source_rank, -int(post.get("id") or 0))
 
             candidates.sort(key=candidate_priority)
 
@@ -797,8 +798,8 @@ async def source_copy_loop(app):
                     # claim on failure: a partial Telegram send must not be retried
                     # as a duplicate link.
                     slot_owner = "source-copy:" + _username(source).lower() + ":" + str(post["id"])
-                    if not bot.reserve_auto_publish_slot(slot_owner, cooldown_seconds=900):
-                        log.info("⏳ Global 15-minute publish cadence active; source-copy candidate deferred: %s", _normalize_link(link))
+                    if not bot.reserve_auto_publish_slot(slot_owner, cooldown_seconds=300):
+                        log.info("⏳ Global 5-minute publish cadence active; source-copy candidate deferred: %s", _normalize_link(link))
                         continue
 
                     if not _claim_post(bot, source, post["id"], link, post):
@@ -857,5 +858,5 @@ async def source_copy_loop(app):
             log.exception("Source-copy cycle failed; retrying")
 
         # Check for fresh source posts regularly; the shared DB lease still
-        # permits at most one successful automatic post every 900 seconds.
+        # permits at most one successful automatic post every 300 seconds.
         await asyncio.sleep(60)
