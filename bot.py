@@ -59,9 +59,9 @@ DB_FILE = os.getenv("DB_FILE", "/var/data/zoner_offers.db" if os.path.isdir("/va
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/zoneroffers").strip() or "https://t.me/zoneroffers"
 SECOND_CHANNEL_URL = os.getenv("SECOND_CHANNEL_URL") or "https://t.me/offerleloturant"
 try:
-    SCAN_SECONDS = max(30, min(int(os.getenv("SCAN_SECONDS", "900")), 86400))
+    SCAN_SECONDS = max(30, min(int(os.getenv("SCAN_SECONDS", "300")), 86400))
 except (TypeError, ValueError):
-    SCAN_SECONDS = 900
+    SCAN_SECONDS = 300
 MIN_DEAL_SCORE = int(os.getenv("MIN_DEAL_SCORE", "45"))
 # Fresh product discovery is allowed once every 2 hours; publishing itself
 # continues on the normal interval and never waits for live scraping.
@@ -134,8 +134,8 @@ def db():
     return con
 
 
-def reserve_auto_publish_slot(owner, cooldown_seconds=900, lease_seconds=300):
-    """Atomically enforce one successful automatic post per 15-minute window
+def reserve_auto_publish_slot(owner, cooldown_seconds=300, lease_seconds=300):
+    """Atomically enforce one successful automatic post per 5-minute window
     across the deal scanner and the public-channel source copier."""
     now = time.time()
     con = db()
@@ -1075,7 +1075,7 @@ async def _button_handler_impl(update, context):
         await query.edit_message_text(
             "🤖 <b>AI Deal Hunter</b>\n\n"
             "Zoner checks multiple public deal sources automatically, detects discount signals, scores deal quality, filters duplicates and publishes only stronger candidates.\n\n"
-            f"⏱️ Auto publishing: every 15 minutes\n🎯 Minimum score: {MIN_DEAL_SCORE}/100",
+            f"⏱️ Auto publishing: every 5 minutes\n🎯 Minimum score: {MIN_DEAL_SCORE}/100",
             parse_mode=ParseMode.HTML, reply_markup=main_menu(query.from_user.id)); return
     if data.startswith("offer_"):
         try: offer_id = int(data[6:])
@@ -1282,8 +1282,8 @@ async def _button_handler_impl(update, context):
             await query.edit_message_text(
                 "⏰ <b>Post Interval</b>\n\n"
                 f"Current: <b>{html.escape(str(interval))} seconds</b>\n"
-                "Production interval: <b>900 seconds (15 minutes)</b>\n\n"
-                "Auto publishing is fixed at 15 minutes.",
+                "Production interval: <b>300 seconds (5 minutes)</b>\n\n"
+                "Auto publishing is fixed at 5 minutes.",
                 parse_mode=ParseMode.HTML, reply_markup=admin_menu())
             return
         if data == "admin_broadcast":
@@ -1375,7 +1375,7 @@ async def _button_handler_impl(update, context):
                 f"📢 <b>Published Link Records:</b> {published}\n"
                 f"🎯 <b>Unique Published Offers:</b> {unique_published_offers}\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
-                "⏱️ <b>Auto Publishing:</b> 15 minutes (900 sec)\n"
+                "⏱️ <b>Auto Publishing:</b> 5 minutes (300 sec)\n"
                 f"🎯 <b>Minimum Deal Score:</b> {MIN_DEAL_SCORE}\n\n"
                 "🟢 Stats are read live from the bot database.",
                 parse_mode=ParseMode.HTML,
@@ -2072,7 +2072,7 @@ async def _publish_offer_impl(bot, row, allow_duplicate=False):
 
     # Subscriber notifications are strictly background/best-effort.
     # NEVER await subscriber delivery here: a slow/blocked subscriber or
-    # Telegram rate-limit must not delay the 15-minute channel/group publisher.
+    # Telegram rate-limit must not delay the 5-minute channel/group publisher.
     con = db()
     users = [row["user_id"] for row in con.execute(
         "SELECT user_id FROM subscribers WHERE enabled=1"
@@ -2113,14 +2113,14 @@ async def _publish_offer_impl(bot, row, allow_duplicate=False):
 
 
 async def publish_offer(bot, row, allow_duplicate=False):
-    """Use one shared 15-minute global slot for all automatic publishing.
+    """Use one shared 5-minute global slot for all automatic publishing.
     Intentional admin republishing (allow_duplicate=True) remains manual and bypasses
     the automatic cadence, while the URL duplicate rules still apply to auto posts."""
     if allow_duplicate:
         return await _publish_offer_impl(bot, row, allow_duplicate=True)
 
     owner = "deal-scanner:" + str(row["id"])
-    if not reserve_auto_publish_slot(owner, cooldown_seconds=900):
+    if not reserve_auto_publish_slot(owner, cooldown_seconds=300):
         log.info("⏳ Global publish cadence active; skipping automatic deal %s this cycle", row["id"])
         return False
 
@@ -2256,10 +2256,10 @@ async def scan_and_publish(bot, manual=False):
 
 
 async def auto_scan_loop(app):
-    """Automatic deal scanner sharing the global 15-minute publish limiter."""
+    """Automatic deal scanner sharing the global 5-minute publish limiter."""
     while True:
         try:
-            # Do not run another scan while the global 15-minute publishing
+            # Do not run another scan while the global 5-minute publishing
             # window is active. Recheck at most once a minute so a source-copy
             # post cannot accidentally push the next automatic deal to 30 minutes.
             con = db()
@@ -2273,7 +2273,7 @@ async def auto_scan_loop(app):
                 con.close()
 
             last_published = float(row["last_published_at"] or 0) if row else 0.0
-            remaining = 900 - (time.time() - last_published)
+            remaining = 300 - (time.time() - last_published)
             if remaining > 0:
                 await asyncio.sleep(min(60, max(1, remaining)))
                 continue
@@ -2294,14 +2294,14 @@ async def auto_scan_loop(app):
                     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
                 )
                 con.execute(
-                    "INSERT INTO settings(key, value) VALUES('post_interval', '900') "
-                    "ON CONFLICT(key) DO UPDATE SET value='900'"
+                    "INSERT INTO settings(key, value) VALUES('post_interval', '300') "
+                    "ON CONFLICT(key) DO UPDATE SET value='300'"
                 )
                 con.commit()
             finally:
                 con.close()
         except Exception:
-            log.exception("Could not normalize post_interval to 900 seconds.")
+            log.exception("Could not normalize post_interval to 300 seconds.")
         await asyncio.sleep(60)
 
 
@@ -2378,12 +2378,12 @@ async def add_menu_item(update, context):
     )
 
 async def set_interval_command(update, context):
-    """Admin-only status command; production cadence stays locked at 15 minutes."""
+    """Admin-only status command; production cadence stays locked at 5 minutes."""
     if not is_admin(update):
         return
     await update.message.reply_text(
         "⏰ <b>Auto Publishing Interval</b>\\n\\n"
-        "🔒 Strictly locked: <b>900 seconds (15 minutes)</b>.\\n"
+        "🔒 Strictly locked: <b>300 seconds (5 minutes)</b>.\\n"
         "This cannot be changed until the administrator explicitly requests an interval change.",
         parse_mode=ParseMode.HTML,
     )
