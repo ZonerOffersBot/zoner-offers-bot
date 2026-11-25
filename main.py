@@ -9,12 +9,13 @@ from telegram.error import RetryAfter
 from telegram.ext import CommandHandler, MessageHandler, filters
 
 
+_zoner_main_menu = bot.main_menu
+
+
 def _patched_main_menu(user_id=None):
-    # User-facing menu shows only the Instamart interface.
-    # Existing handlers/admin features remain registered and unchanged.
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛍️ Swiggy Instamart", callback_data="instamart_order")],
-    ])
+    # Keep the original Zoner Offers deal-discovery menu as the bot home screen.
+    # Instamart demo handlers remain available only through their own callbacks.
+    return _zoner_main_menu(user_id)
 
 bot.main_menu = _patched_main_menu
 
