@@ -33,6 +33,7 @@ def init_db(path):
         CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id INTEGER NOT NULL, referred_id INTEGER NOT NULL UNIQUE, commission_paise INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS daily_rewards(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, reward_paise INTEGER NOT NULL DEFAULT 0, claimed_on TEXT NOT NULL, UNIQUE(user_id, claimed_on));
         CREATE TABLE IF NOT EXISTS support_tickets(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, full_name TEXT, query TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', admin_reply TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE IF NOT EXISTS shop_feature_flags(feature_key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS shop_spin_history(user_id INTEGER NOT NULL, spin_date TEXT NOT NULL, prize_paise INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(user_id,spin_date));
         """)
