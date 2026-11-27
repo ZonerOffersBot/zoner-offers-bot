@@ -21,6 +21,17 @@ def _zoner_init_db_with_shop():
     shop_features.init_db(bot.DB_FILE)
 
 bot.init_db = _zoner_init_db_with_shop
+_zoner_admin_menu = bot.admin_menu
+
+def _patched_admin_menu():
+    markup = _zoner_admin_menu()
+    rows = list(markup.inline_keyboard)
+    rows.append([InlineKeyboardButton("🛍️ Shop Management", callback_data="shopadmin:home")])
+    return InlineKeyboardMarkup(rows)
+
+bot.admin_menu = _patched_admin_menu
+
+
 _zoner_main_menu = bot.main_menu
 
 
