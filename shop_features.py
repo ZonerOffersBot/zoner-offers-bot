@@ -25,7 +25,7 @@ def init_db(path):
     con = connect()
     try:
         con.executescript("""
-        CREATE TABLE IF NOT EXISTS shop_users(user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, referral_code TEXT UNIQUE, referred_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS shop_users(user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, referral_code TEXT UNIQUE, referred_by INTEGER, is_blocked INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS user_wallets(user_id INTEGER PRIMARY KEY, balance_paise INTEGER NOT NULL DEFAULT 0, loyalty_points INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS wallet_transactions(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, amount_paise INTEGER NOT NULL, reason TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS digital_products(id INTEGER PRIMARY KEY AUTOINCREMENT, category_id TEXT DEFAULT 'general', name TEXT NOT NULL, price_paise INTEGER NOT NULL DEFAULT 0, stock_count INTEGER NOT NULL DEFAULT 0, file_id TEXT, description TEXT, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -36,6 +36,9 @@ def init_db(path):
         CREATE TABLE IF NOT EXISTS shop_feature_flags(feature_key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS shop_spin_history(user_id INTEGER NOT NULL, spin_date TEXT NOT NULL, prize_paise INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(user_id,spin_date));
         """)
+        user_columns={r["name"] for r in con.execute("PRAGMA table_info(shop_users)").fetchall()}
+        if "is_blocked" not in user_columns:
+            con.execute("ALTER TABLE shop_users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
         con.executemany("INSERT OR IGNORE INTO shop_feature_flags(feature_key,enabled) VALUES(?,1)",[(item["key"],) for item in FEATURES])
         con.commit()
     finally:
@@ -72,6 +75,14 @@ def home_markup():
 async def allowed(update,context):
     import bot
     uid=update.effective_user.id
+    con=connect()
+    try:
+        blocked=con.execute("SELECT is_blocked FROM shop_users WHERE user_id=?",(uid,)).fetchone()
+    finally: con.close()
+    if blocked and blocked["is_blocked"] and not bot.is_admin(update):
+        if update.callback_query: await update.callback_query.answer("🚫 Shop access blocked by admin.",show_alert=True)
+        else: await update.message.reply_text("🚫 Shop access blocked by admin.")
+        return False
     if bot.is_user_verified(uid) or bot.is_admin(update):
         return True
     try:
@@ -368,14 +379,21 @@ async def admin_callback(update,context):
             tickets=con.execute("SELECT COUNT(*) FROM support_tickets WHERE status='open'").fetchone()[0]
             await q.edit_message_text("📊 <b>Shop Statistics</b>\n👥 Users: %s\n🧾 Orders: %s\n💵 Recorded revenue: ₹%.2f\n👛 Wallet liability: ₹%.2f\n🆘 Open tickets: %s"%(users,orders,revenue/100,wallets/100,tickets),parse_mode=ParseMode.HTML,reply_markup=admin_markup())
         elif action=="users":
-            rows=con.execute("SELECT user_id,username,first_name,created_at FROM shop_users ORDER BY created_at DESC LIMIT 25").fetchall()
-            body="\n".join("• <code>%s</code> · @%s · %s"%(r["user_id"],html.escape(r["username"] or "—"),html.escape(r["first_name"] or "")) for r in rows) or "No shop users yet."
-            await q.edit_message_text("👥 <b>Recent Shop Users</b>\n"+body,parse_mode=ParseMode.HTML,reply_markup=admin_markup())
+            rows=con.execute("SELECT user_id,username,first_name,is_blocked FROM shop_users ORDER BY created_at DESC LIMIT 25").fetchall()
+            buttons=[[InlineKeyboardButton(("🚫 Block " if not r["is_blocked"] else "✅ Unblock ")+"%s · %s"%(r["user_id"],(r["first_name"] or "")[:18]),callback_data="shopadmin:block:%s"%r["user_id"])] for r in rows]
+            buttons.append([InlineKeyboardButton("⬅️ Admin Controls",callback_data="shopadmin:home")])
+            await q.edit_message_text("👥 <b>Recent Shop Users</b>\nTap to block/unblock shop access.",parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(buttons))
         elif action=="products":
             rows=con.execute("SELECT id,name,price_paise,stock_count,is_active FROM digital_products ORDER BY id DESC LIMIT 25").fetchall()
             buttons=[[InlineKeyboardButton(("🟢" if r["is_active"] else "🔴")+" #%s %s · ₹%.2f · stock %s"%(r["id"],r["name"][:24],r["price_paise"]/100,r["stock_count"]),callback_data="shopadmin:product_toggle:%s"%r["id"])] for r in rows]
             buttons.append([InlineKeyboardButton("⬅️ Admin Controls",callback_data="shopadmin:home")])
             await q.edit_message_text("📦 <b>Product stock</b>\nTap a product to activate/deactivate it.",parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(buttons))
+        elif action.startswith("block:"):
+            target=int(action.split(":")[1])
+            con.execute("UPDATE shop_users SET is_blocked=CASE WHEN is_blocked=1 THEN 0 ELSE 1 END WHERE user_id=?",(target,))
+            con.commit()
+            row=con.execute("SELECT is_blocked FROM shop_users WHERE user_id=?",(target,)).fetchone()
+            await q.edit_message_text("🚫 User %s shop access blocked."%target if row and row["is_blocked"] else "✅ User %s shop access restored."%target,reply_markup=admin_markup())
         elif action.startswith("product_toggle:"):
             pid=int(action.split(":")[1])
             con.execute("UPDATE digital_products SET is_active=CASE WHEN is_active=1 THEN 0 ELSE 1 END WHERE id=?",(pid,)); con.commit()
