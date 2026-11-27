@@ -25,9 +25,11 @@ _zoner_main_menu = bot.main_menu
 
 
 def _patched_main_menu(user_id=None):
-    # Keep the original Zoner Offers deal-discovery menu as the bot home screen.
-    # Instamart demo handlers remain available only through their own callbacks.
-    return _zoner_main_menu(user_id)
+    # Preserve every existing deal-discovery button and append the SQLite shop entry.
+    markup = _zoner_main_menu(user_id)
+    rows = list(markup.inline_keyboard)
+    rows.append([InlineKeyboardButton("🛍️ Zoner Shop", callback_data="shop:home")])
+    return InlineKeyboardMarkup(rows)
 
 bot.main_menu = _patched_main_menu
 
