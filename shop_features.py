@@ -101,6 +101,7 @@ async def allowed(update,context):
         bot.mark_user_verified(uid)
         return True
     if update.callback_query:
+        await update.callback_query.answer()
         await update.callback_query.edit_message_text(bot.join_gate_text(),parse_mode=ParseMode.HTML,reply_markup=bot.join_gate_markup())
     else:
         await update.message.reply_text(bot.join_gate_text(),parse_mode=ParseMode.HTML,reply_markup=bot.join_gate_markup())
