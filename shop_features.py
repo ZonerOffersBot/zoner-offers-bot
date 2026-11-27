@@ -122,6 +122,24 @@ async def wallet_adjust_command(update,context):
     finally: con.close()
     await update.message.reply_text("✅ Wallet updated. Balance: ₹%.2f"%(bal/100))
 
+async def deliver_order_command(update,context):
+    if not is_admin(update): return
+    try: oid=int(context.args[0])
+    except (ValueError,IndexError):
+        await update.message.reply_text("Use /shopdeliver ORDER_ID"); return
+    con=connect()
+    try:
+        row=con.execute("SELECT user_id,delivered_file_id FROM shop_orders WHERE id=? AND status='delivery_pending'",(oid,)).fetchone()
+        if not row:
+            await update.message.reply_text("Pending delivery order not found."); return
+        await context.bot.send_document(row["user_id"],row["delivered_file_id"],caption="Purchase delivered · Order #%s"%oid)
+        con.execute("UPDATE shop_orders SET status='paid' WHERE id=?",(oid,)); con.commit()
+    except Exception as exc:
+        log.exception("Manual delivery retry failed for order %s",oid)
+        await update.message.reply_text("Delivery retry failed: %s"%type(exc).__name__); return
+    finally: con.close()
+    await update.message.reply_text("✅ Order #%s delivered."%oid)
+
 async def reply_command(update,context):
     if not is_admin(update): return
     try: tid=int(context.args[0])
@@ -189,11 +207,16 @@ async def handle_callback(update,context):
                 con.rollback(); await q.edit_message_text("👛 Insufficient wallet balance. Contact admin for a wallet top-up.",reply_markup=home_markup()); return True
             con.execute("UPDATE user_wallets SET balance_paise=balance_paise-? WHERE user_id=?",(p["price_paise"],uid))
             con.execute("UPDATE digital_products SET stock_count=stock_count-1 WHERE id=? AND stock_count>0",(pid,))
-            cur=con.execute("INSERT INTO shop_orders(user_id,product_id,amount_paise,delivered_file_id) VALUES(?,?,?,?)",(uid,pid,p["price_paise"],p["file_id"]))
+            cur=con.execute("INSERT INTO shop_orders(user_id,product_id,amount_paise,delivered_file_id,status) VALUES(?,?,?,?,?)",(uid,pid,p["price_paise"],p["file_id"],"delivery_pending"))
             con.execute("INSERT INTO wallet_transactions(user_id,amount_paise,reason) VALUES(?,?,?)",(uid,-p["price_paise"],"purchase:%s"%cur.lastrowid)); con.commit()
-            try: await context.bot.send_document(uid,p["file_id"],caption="Purchase delivered · Order #%s"%cur.lastrowid)
-            except Exception: log.exception("Delivery failed for order %s",cur.lastrowid)
-            await q.edit_message_text("✅ Order #%s created. Delivery was attempted in your private chat."%cur.lastrowid,reply_markup=home_markup()); return True
+            try:
+                await context.bot.send_document(uid,p["file_id"],caption="Purchase delivered · Order #%s"%cur.lastrowid)
+                con.execute("UPDATE shop_orders SET status='paid' WHERE id=?",(cur.lastrowid,)); con.commit()
+                delivery="File delivered successfully."
+            except Exception:
+                log.exception("Delivery failed for order %s",cur.lastrowid)
+                delivery="Delivery is pending. Please contact support with this order ID."
+            await q.edit_message_text("✅ Order #%s created. %s"%(cur.lastrowid,delivery),reply_markup=home_markup()); return True
         if data=="shop:wallet":
             w=con.execute("SELECT balance_paise,loyalty_points FROM user_wallets WHERE user_id=?",(uid,)).fetchone()
             await q.edit_message_text("👛 <b>Wallet</b>\nBalance: ₹%.2f\nPoints: %s\nTop-ups are admin-controlled for now."%((w["balance_paise"] if w else 0)/100,(w["loyalty_points"] if w else 0)),parse_mode=ParseMode.HTML,reply_markup=home_markup()); return True
@@ -246,6 +269,7 @@ async def handle_callback(update,context):
 
 def install(app):
     app.add_handler(CommandHandler("shop",shop_command))
+    app.add_handler(CommandHandler("shopdeliver",deliver_order_command))
     app.add_handler(CommandHandler("shopadmin",admin_command))
     app.add_handler(CommandHandler("shopproduct",add_product_command))
     app.add_handler(CommandHandler("shopwallet",wallet_adjust_command))
