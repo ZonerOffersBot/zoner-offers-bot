@@ -111,7 +111,7 @@ async def admin_command(update,context):
     try:
         counts=[con.execute("SELECT COUNT(*) FROM shop_users").fetchone()[0],con.execute("SELECT COUNT(*) FROM digital_products WHERE is_active=1").fetchone()[0],con.execute("SELECT COUNT(*) FROM shop_orders").fetchone()[0],con.execute("SELECT COUNT(*) FROM support_tickets WHERE status='open'").fetchone()[0],con.execute("SELECT COALESCE(SUM(amount_paise),0) FROM shop_orders WHERE status='paid'").fetchone()[0]]
     finally: con.close()
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("➕ Add Product",callback_data="shopadmin:help_product"),InlineKeyboardButton("👥 Users",callback_data="shopadmin:users")],[InlineKeyboardButton("📦 Products",callback_data="shopadmin:products"),InlineKeyboardButton("🧾 Orders",callback_data="shopadmin:orders")],[InlineKeyboardButton("🎟 Support",callback_data="shopadmin:tickets"),InlineKeyboardButton("⚙️ Feature Flags",callback_data="shopadmin:flags")]])
+    kb=admin_markup()
     await update.message.reply_text("🛠️ <b>Zoner Shop Admin</b>\nUsers: %s\nProducts: %s\nOrders: %s\nOpen tickets: %s\nRecorded revenue: ₹%.2f\n\n/shopproduct Name|Price|Stock|Description|FileID\n/shopwallet USER_ID AMOUNT_RUPEES"%(counts[0],counts[1],counts[2],counts[3],counts[4]/100),parse_mode=ParseMode.HTML,reply_markup=kb)
 
 async def add_product_command(update,context):
@@ -186,6 +186,12 @@ async def text_router(update,context):
         finally: con.close()
         context.user_data.pop("shop_support_wait",None)
         await update.message.reply_text("🎟️ Support ticket #%s created. Use /mytickets to track it."%tid)
+        try:
+            import bot as zoner_bot
+            for admin_id in zoner_bot.ADMIN_IDS:
+                await context.bot.send_message(int(admin_id),"🆘 <b>New private support ticket #%s</b>\nUser: <code>%s</code>\n%s"%(tid,update.effective_user.id,html.escape(body[:2500])),parse_mode=ParseMode.HTML)
+        except Exception:
+            log.exception("Could not notify shop admin about ticket #%s",tid)
         return
     tid=context.user_data.get("shop_reply_ticket")
     if tid and is_admin(update):
@@ -552,7 +558,8 @@ async def handle_callback(update,context):
         if data=="shop:referral":
             row=con.execute("SELECT referral_code FROM shop_users WHERE user_id=?",(uid,)).fetchone()
             count=con.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?",(uid,)).fetchone()[0]
-            await q.edit_message_text("🤝 <b>Refer & Earn</b>\nYour personal link: <code>https://t.me/%s?start=%s</code>\nSuccessful referrals: <b>%s</b>\nReward: ₹10 per new referred user."%(context.bot.username,uid,count),parse_mode=ParseMode.HTML,reply_markup=home_markup()); return True
+            me=await context.bot.get_me()
+            await q.edit_message_text("🤝 <b>Refer & Earn</b>\nYour personal link: <code>https://t.me/%s?start=%s</code>\nSuccessful referrals: <b>%s</b>\nReward: ₹10 per new referred user."%(me.username,uid,count),parse_mode=ParseMode.HTML,reply_markup=home_markup()); return True
         if data=="shop:support":
             context.user_data["shop_support_wait"]=True
             await q.edit_message_text("🆘 Send your issue in one message. This creates a private support ticket, not a public live chat."); return True
