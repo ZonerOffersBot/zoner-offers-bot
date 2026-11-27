@@ -436,7 +436,8 @@ async def admin_callback(update,context):
                 with open(path,"w",newline="",encoding="utf-8") as out:
                     writer=csv.writer(out); writer.writerow(["order_id","user_id","product_id","amount_paise","status","created_at"])
                     writer.writerows([tuple(r) for r in rows])
-                await context.bot.send_document(chat_id=q.from_user.id,document=open(path,"rb"),filename="zoner-shop-orders.csv",caption="📊 Shop orders export")
+                with open(path,"rb") as export_file:
+                    await context.bot.send_document(chat_id=q.from_user.id,document=export_file,filename="zoner-shop-orders.csv",caption="📊 Shop orders export")
             finally:
                 try: os.unlink(path)
                 except OSError: pass
