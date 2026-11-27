@@ -461,12 +461,13 @@ async def admin_callback(update,context):
                 await q.edit_message_text("💬 Ticket #%s ka private reply bhejein. Cancel: /cancel"%tid)
         elif action=="flags":
             rows=con.execute("SELECT feature_key,enabled FROM shop_feature_flags ORDER BY feature_key").fetchall()
-            buttons=[[InlineKeyboardButton(("🟢 ON " if r["enabled"] else "🔴 OFF ")+r["feature_key"][:42],callback_data="shopadmin:flag:%s"%r["feature_key"])] for r in rows]
+            buttons=[[InlineKeyboardButton(("🟢 ON " if r["enabled"] else "🔴 OFF ")+r["feature_key"][:42],callback_data="shopadmin:flag:%s"%next((i for i,item in enumerate(FEATURES) if item["key"]==r["feature_key"]),0))] for r in rows]
             buttons.append([InlineKeyboardButton("⬅️ Admin Controls",callback_data="shopadmin:home")])
             await q.edit_message_text("⚙️ <b>Feature flags</b>\nTap to toggle. Master emergency switch is included.",parse_mode=ParseMode.HTML,reply_markup=InlineKeyboardMarkup(buttons))
         elif action.startswith("flag:"):
-            key=action.split(":",1)[1]
-            row=con.execute("SELECT enabled FROM shop_feature_flags WHERE feature_key=?",(key,)).fetchone()
+            try: key=FEATURES[int(action.split(":",1)[1])]["key"]
+            except (ValueError,IndexError): key=""
+            row=con.execute("SELECT enabled FROM shop_feature_flags WHERE feature_key=?",(key,)).fetchone() if key else None
             if row:
                 con.execute("UPDATE shop_feature_flags SET enabled=? WHERE feature_key=?",(0 if row["enabled"] else 1,key)); con.commit()
             await q.edit_message_text("✅ Feature flag updated.",reply_markup=admin_markup())
