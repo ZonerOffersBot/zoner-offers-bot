@@ -1,3 +1,4 @@
+import asyncio
 import html
 import logging
 import random
@@ -560,6 +561,6 @@ def install(app):
     app.add_handler(CommandHandler("shopwallet",wallet_adjust_command))
     app.add_handler(CommandHandler("shopreply",reply_command))
     app.add_handler(CommandHandler("mytickets",mytickets_command))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND,admin_message_router),group=2)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,admin_message_router),group=2)
     app.add_handler(MessageHandler(filters.Document.ALL,admin_document_router),group=2)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_router),group=3)
