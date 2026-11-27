@@ -306,6 +306,10 @@ async def admin_message_router(update,context):
         con=connect()
         try:
             con.execute("INSERT OR IGNORE INTO user_wallets(user_id) VALUES(?)",(uid,))
+            current=con.execute("SELECT balance_paise FROM user_wallets WHERE user_id=?",(uid,)).fetchone()[0]
+            if current+amount<0:
+                await msg.reply_text("❌ Wallet balance zero se neeche nahi ja sakta. Current: ₹%.2f"%(current/100))
+                return
             con.execute("UPDATE user_wallets SET balance_paise=balance_paise+? WHERE user_id=?",(amount,uid))
             con.execute("INSERT INTO wallet_transactions(user_id,amount_paise,reason) VALUES(?,?,?)",(uid,amount,"admin_adjustment"))
             bal=con.execute("SELECT balance_paise FROM user_wallets WHERE user_id=?",(uid,)).fetchone()[0]
