@@ -1,5 +1,6 @@
 import html
 import logging
+import random
 import sqlite3
 from feature_controls import FEATURES
 from datetime import date
@@ -32,6 +33,7 @@ def init_db(path):
         CREATE TABLE IF NOT EXISTS daily_rewards(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, reward_paise INTEGER NOT NULL DEFAULT 0, claimed_on TEXT NOT NULL, UNIQUE(user_id, claimed_on));
         CREATE TABLE IF NOT EXISTS support_tickets(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, full_name TEXT, query TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', admin_reply TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS shop_feature_flags(feature_key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS shop_spin_history(user_id INTEGER NOT NULL, spin_date TEXT NOT NULL, prize_paise INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(user_id,spin_date));
         """)
         con.executemany("INSERT OR IGNORE INTO shop_feature_flags(feature_key,enabled) VALUES(?,1)",[(item["key"],) for item in FEATURES])
         con.commit()
@@ -55,7 +57,8 @@ def home_markup():
     return InlineKeyboardMarkup([
       [InlineKeyboardButton("🛍️ Shop Products",callback_data="shop:products"),InlineKeyboardButton("👛 My Wallet",callback_data="shop:wallet")],
       [InlineKeyboardButton("🎁 Daily Reward",callback_data="shop:reward"),InlineKeyboardButton("📦 My Orders",callback_data="shop:orders")],
-      [InlineKeyboardButton("🤝 Refer & Earn",callback_data="shop:referral"),InlineKeyboardButton("🆘 Support Ticket",callback_data="shop:support")]])
+      [InlineKeyboardButton("🤝 Refer & Earn",callback_data="shop:referral"),InlineKeyboardButton("🎟️ Spin & Win",callback_data="shop:spin")],
+      [InlineKeyboardButton("🆘 Help / Support",callback_data="shop:support")]])
 
 async def allowed(update,context):
     import bot
@@ -224,6 +227,22 @@ async def handle_callback(update,context):
             rows=con.execute("SELECT amount_paise,reason FROM wallet_transactions WHERE user_id=? ORDER BY id DESC LIMIT 10",(uid,)).fetchall()
             body="\n".join("%+0.2f · %s"%(r["amount_paise"]/100,r["reason"]) for r in rows) or "No transactions."
             await q.edit_message_text("📜 Wallet history\n"+body,reply_markup=home_markup()); return True
+        if data=="shop:spin":
+            today=date.today().isoformat()
+            prize=random.choice([0,500,1000,2000,5000])
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                con.execute("INSERT INTO shop_spin_history(user_id,spin_date,prize_paise) VALUES(?,?,?)",(uid,today,prize))
+                con.execute("INSERT OR IGNORE INTO user_wallets(user_id) VALUES(?)",(uid,))
+                if prize:
+                    con.execute("UPDATE user_wallets SET balance_paise=balance_paise+? WHERE user_id=?",(prize,uid))
+                    con.execute("INSERT INTO wallet_transactions(user_id,amount_paise,reason) VALUES(?,?,?)",(uid,prize,"daily_spin"))
+                con.commit()
+                msg="🎉 You won ₹%.2f!"%(prize/100) if prize else "🙂 Better luck next time! Try again tomorrow."
+            except sqlite3.IntegrityError:
+                con.rollback()
+                msg="⏳ Aaj ka spin already use ho chuka hai. Kal dobara try karein."
+            await q.edit_message_text(msg,reply_markup=home_markup()); return True
         if data=="shop:reward":
             try:
                 con.execute("INSERT INTO daily_rewards(user_id,reward_paise,claimed_on) VALUES(?,?,?)",(uid,100,date.today().isoformat()))
@@ -239,7 +258,8 @@ async def handle_callback(update,context):
             await q.edit_message_text("📦 My Orders\n"+body,reply_markup=home_markup()); return True
         if data=="shop:referral":
             row=con.execute("SELECT referral_code FROM shop_users WHERE user_id=?",(uid,)).fetchone()
-            await q.edit_message_text("🤝 <b>Refer & Earn</b>\nCode: <code>%s</code>\nShare: <code>/start %s</code>\nReferral reward crediting is not enabled yet."%(row["referral_code"],row["referral_code"]),parse_mode=ParseMode.HTML,reply_markup=home_markup()); return True
+            count=con.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?",(uid,)).fetchone()[0]
+            await q.edit_message_text("🤝 <b>Refer & Earn</b>\nYour referral code: <code>%s</code>\nShare command: <code>/start %s</code>\nSuccessful referrals: <b>%s</b>\nReferral bonus will be credited after referral tracking is enabled."%(row["referral_code"],uid,count),parse_mode=ParseMode.HTML,reply_markup=home_markup()); return True
         if data=="shop:support":
             context.user_data["shop_support_wait"]=True
             await q.edit_message_text("🆘 Send your issue in one message. This creates a private support ticket, not a public live chat."); return True
