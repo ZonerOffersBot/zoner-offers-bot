@@ -7,12 +7,20 @@ import tempfile
 from datetime import datetime, timezone
 import bot
 import runner
+import shop_features
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter
 from telegram.ext import CommandHandler, MessageHandler, filters
 
 
+_original_init_db = bot.init_db
+
+def _zoner_init_db_with_shop():
+    _original_init_db()
+    shop_features.init_db(bot.DB_FILE)
+
+bot.init_db = _zoner_init_db_with_shop
 _zoner_main_menu = bot.main_menu
 
 
@@ -52,6 +60,9 @@ _original_button_impl = bot._button_handler_impl
 async def _patched_button_impl(update, context):
     query = update.callback_query
     data = query.data
+    if data.startswith(("shop:", "shopadmin:")):
+        if await shop_features.handle_callback(update, context):
+            return
     if data == "instamart_order":
         user_id = query.from_user.id
         if not bot.is_user_verified(user_id):
@@ -393,6 +404,7 @@ _original_build_app = runner.build_app
 
 def build_app():
     app = _original_build_app()
+    shop_features.install(app)
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, instamart_order_input), group=0)
     return app
