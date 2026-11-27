@@ -3,7 +3,7 @@ import html
 import logging
 import random
 import sqlite3
-from feature_controls import FEATURES
+from feature_controls import FEATURES, MASTER_KEY
 from datetime import date
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -79,7 +79,12 @@ async def allowed(update,context):
     con=connect()
     try:
         blocked=con.execute("SELECT is_blocked FROM shop_users WHERE user_id=?",(uid,)).fetchone()
+        master=con.execute("SELECT enabled FROM shop_feature_flags WHERE feature_key=?",(MASTER_KEY,)).fetchone()
     finally: con.close()
+    if master and not master["enabled"] and not bot.is_admin(update):
+        if update.callback_query: await update.callback_query.answer("🔴 Shop is temporarily disabled by admin.",show_alert=True)
+        else: await update.message.reply_text("🔴 Shop is temporarily disabled by admin.")
+        return False
     if blocked and blocked["is_blocked"] and not bot.is_admin(update):
         if update.callback_query: await update.callback_query.answer("🚫 Shop access blocked by admin.",show_alert=True)
         else: await update.message.reply_text("🚫 Shop access blocked by admin.")
