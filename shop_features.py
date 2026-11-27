@@ -287,10 +287,7 @@ async def admin_message_router(update,context):
         finally: con.close()
         context.user_data.pop("shop_product_draft",None)
         context.user_data.pop("shop_admin_state",None)
-        await msg.reply_text("✅ Product #%s added successfully.
-Name: %s
-Price: ₹%.2f
-Stock: %s"%(pid,html.escape(draft["name"]),draft["price_paise"]/100,int(text)),parse_mode=ParseMode.HTML,reply_markup=admin_markup())
+        await msg.reply_text("✅ Product #%s added successfully.\nName: %s\nPrice: ₹%.2f\nStock: %s"%(pid,html.escape(draft["name"]),draft["price_paise"]/100,int(text)),parse_mode=ParseMode.HTML,reply_markup=admin_markup())
     elif state=="wallet_user":
         if not text.isdigit():
             await msg.reply_text("Valid Telegram User ID bhejein.")
