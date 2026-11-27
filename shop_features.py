@@ -80,10 +80,12 @@ async def allowed(update,context):
     try:
         blocked=con.execute("SELECT is_blocked FROM shop_users WHERE user_id=?",(uid,)).fetchone()
         master=con.execute("SELECT enabled FROM shop_feature_flags WHERE feature_key=?",(MASTER_KEY,)).fetchone()
+        online_row=con.execute("SELECT value FROM settings WHERE key='shop_online'").fetchone()
+        shop_online=online_row is None or online_row["value"]!="0"
     finally: con.close()
-    if master and not master["enabled"] and not bot.is_admin(update):
-        if update.callback_query: await update.callback_query.answer("🔴 Shop is temporarily disabled by admin.",show_alert=True)
-        else: await update.message.reply_text("🔴 Shop is temporarily disabled by admin.")
+    if (not shop_online or (master and not master["enabled"])) and not bot.is_admin(update):
+        if update.callback_query: await update.callback_query.answer("🔴 Zoner Shop is currently offline.",show_alert=True)
+        else: await update.message.reply_text("🔴 Zoner Shop is currently offline.")
         return False
     if blocked and blocked["is_blocked"] and not bot.is_admin(update):
         if update.callback_query: await update.callback_query.answer("🚫 Shop access blocked by admin.",show_alert=True)
