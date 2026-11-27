@@ -223,6 +223,16 @@ async def admin_message_router(update,context):
     state=_admin_text_state(update,context)
     if not state:
         return
+    if state=="product_file":
+        if not msg.document:
+            await msg.reply_text("Please Telegram Document bhejein.")
+            return
+        draft=context.user_data.get("shop_product_draft",{})
+        draft["file_id"]=msg.document.file_id
+        context.user_data["shop_product_draft"]=draft
+        context.user_data["shop_admin_state"]="product_stock"
+        await msg.reply_text("📦 Available stock quantity bhejein (0 bhi allowed hai).")
+        return
     text=(msg.text or "").strip()
     if text.lower()=="/cancel":
         context.user_data.pop("shop_admin_state",None)
@@ -552,6 +562,15 @@ async def handle_callback(update,context):
     finally: con.close()
     return False
 
+
+async def cancel_command(update,context):
+    context.user_data.pop("shop_admin_state",None)
+    context.user_data.pop("shop_product_draft",None)
+    context.user_data.pop("shop_wallet_uid",None)
+    context.user_data.pop("shop_support_wait",None)
+    context.user_data.pop("shop_reply_ticket",None)
+    await update.message.reply_text("❎ Current input cancelled.")
+
 def install(app):
     app.add_handler(CommandHandler("start",referral_start_capture),group=-1)
     app.add_handler(CommandHandler("shop",shop_command))
@@ -561,6 +580,6 @@ def install(app):
     app.add_handler(CommandHandler("shopwallet",wallet_adjust_command))
     app.add_handler(CommandHandler("shopreply",reply_command))
     app.add_handler(CommandHandler("mytickets",mytickets_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,admin_message_router),group=2)
-    app.add_handler(MessageHandler(filters.Document.ALL,admin_document_router),group=2)
+    app.add_handler(CommandHandler("cancel",cancel_command))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND,admin_message_router),group=2)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_router),group=3)
