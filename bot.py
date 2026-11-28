@@ -860,22 +860,38 @@ def offer_markup(row, back="offers"):
         [InlineKeyboardButton("🏠 Main Menu", callback_data="back")],
     ])
 
+def _admin_button(text, callback_data, style="primary"):
+    """Build a Telegram inline button with Bot API 9.4 color styling.
+
+    python-telegram-bot 21.9 does not expose the style argument directly,
+    so api_kwargs forwards the supported Bot API field without changing
+    the project's pinned dependency or callback behavior.
+    """
+    return InlineKeyboardButton(
+        text=text,
+        callback_data=callback_data,
+        api_kwargs={"style": style},
+    )
+
+
 def admin_menu():
-    group_state = "ON" if str(get_setting_sync("auto_group_publish", "1")) == "1" else "OFF"
+    group_enabled = str(get_setting_sync("auto_group_publish", "1")) == "1"
+    group_state = "ON" if group_enabled else "OFF"
+    group_style = "success" if group_enabled else "danger"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📢 Auto Group Publish: {group_state}", callback_data="admin_group_publish")],
-        [InlineKeyboardButton("📢 Force Join Channels", callback_data="admin_force"),
-         InlineKeyboardButton("📋 Menu Editor", callback_data="admin_menu")],
-        [InlineKeyboardButton("⏰ Post Interval", callback_data="admin_interval"),
-         InlineKeyboardButton("📝 Broadcast", callback_data="admin_broadcast")],
-        [InlineKeyboardButton("🛒 Add Product", callback_data="admin_addproduct"),
-         InlineKeyboardButton("🟣 Re-publish Vault", callback_data="admin_republish")],
-        [InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
-        [InlineKeyboardButton("🧰 Extra Admin Tools", callback_data="admin_tools")],
-        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
-         InlineKeyboardButton("🤖 Scan Now", callback_data="admin_scan")],
-        [InlineKeyboardButton("🧪 Test Channels", callback_data="admin_testchannels"),
-         InlineKeyboardButton("❌ Close", callback_data="admin_close")],
+        [_admin_button(f"📢 Auto Group Publish: {group_state}", "admin_group_publish", group_style)],
+        [_admin_button("📢 Force Join Channels", "admin_force", "primary"),
+         _admin_button("📋 Menu Editor", "admin_menu", "primary")],
+        [_admin_button("⏰ Post Interval", "admin_interval", "primary"),
+         _admin_button("📝 Broadcast", "admin_broadcast", "success")],
+        [_admin_button("🛒 Add Product", "admin_addproduct", "success"),
+         _admin_button("🟣 Re-publish Vault", "admin_republish", "success")],
+        [_admin_button("⚙️ Settings", "admin_settings", "primary")],
+        [_admin_button("🧰 Extra Admin Tools", "admin_tools", "primary")],
+        [_admin_button("📊 Stats", "admin_stats", "primary"),
+         _admin_button("🤖 Scan Now", "admin_scan", "success")],
+        [_admin_button("🧪 Test Channels", "admin_testchannels", "primary"),
+         _admin_button("❌ Close", "admin_close", "danger")],
     ])
 
 def is_admin(update):
