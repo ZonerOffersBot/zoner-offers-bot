@@ -420,6 +420,11 @@ async def callback_handler(update, context):
                 msg = "🛒 Added to cart. Use /shopcart to review."
             con.commit()
             await q.edit_message_text(msg)
+        elif len(parts) == 3 and parts[1] == "category":
+            cid = int(parts[2])
+            rows = con.execute("SELECT id,name,price_paise,stock_count FROM digital_products WHERE is_active=1 AND category_id=? ORDER BY id DESC LIMIT 20", (str(cid),)).fetchall()
+            kb = [[InlineKeyboardButton(f'{r["name"][:32]} · ₹{r["price_paise"]/100:.2f} · stock {r["stock_count"]}', callback_data=f'adv:view:{r["id"]}')] for r in rows]
+            await q.edit_message_text("🗂️ <b>Category products</b>" if rows else "Is category mein products nahi hain.", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb) if kb else None)
         elif len(parts) == 3 and parts[1] == "faq":
             faq = con.execute("SELECT question,answer FROM shop_faq WHERE id=? AND is_active=1", (int(parts[2]),)).fetchone()
             await q.edit_message_text(f'<b>{html.escape(faq["question"])}</b>\n\n{html.escape(faq["answer"])}' if faq else "FAQ not found.",
@@ -447,3 +452,134 @@ def install(app):
     app.add_handler(CommandHandler("shopfaqadd", admin_faq_command))
     app.add_handler(CommandHandler("shoptext", admin_text_command))
     app.add_handler(CommandHandler("shopaudit", admin_audit_command))
+    app.add_handler(CommandHandler("shopcategoryadd", admin_category_add))
+    app.add_handler(CommandHandler("shopcategories", categories_command))
+    app.add_handler(CommandHandler("shopproductcategory", admin_product_category))
+    app.add_handler(CommandHandler("shopwaitlist", stock_waitlist_command))
+    app.add_handler(CommandHandler("shoprestock", admin_restock_command))
+    app.add_handler(CommandHandler("shopcommandadd", admin_custom_command_add))
+    app.add_handler(MessageHandler(filters.COMMAND, custom_command_router), group=4)
+
+
+async def admin_category_add(update, context):
+    if not _admin(update): return
+    raw = " ".join(context.args or [])
+    if "|" not in raw:
+        await update.message.reply_text("Use: /shopcategoryadd NAME|DESCRIPTION"); return
+    name, desc = [x.strip() for x in raw.split("|", 1)]
+    if not name:
+        await update.message.reply_text("Category name required."); return
+    con = db()
+    try:
+        cur = con.execute("INSERT INTO shop_categories(name,description) VALUES(?,?)", (name[:80], desc[:300]))
+        _audit(con, update.effective_user.id, "category_add", name[:80]); con.commit()
+        await update.message.reply_text(f"✅ Category #{cur.lastrowid} created: {html.escape(name[:80])}")
+    except sqlite3.IntegrityError:
+        await update.message.reply_text("This category already exists.")
+    finally: con.close()
+
+
+async def categories_command(update, context):
+    con = db()
+    try:
+        rows = con.execute("SELECT id,name,description FROM shop_categories WHERE is_active=1 ORDER BY name").fetchall()
+        if not rows:
+            await update.message.reply_text("Categories abhi available nahi hain."); return
+        kb = [[InlineKeyboardButton(r["name"][:50], callback_data=f"adv:category:{r['id']}")] for r in rows]
+        await update.message.reply_text("🗂️ <b>Shop categories</b>", parse_mode=ParseMode.HTML,
+                                        reply_markup=InlineKeyboardMarkup(kb))
+    finally: con.close()
+
+
+async def admin_product_category(update, context):
+    if not _admin(update): return
+    try: pid = int(context.args[0]); cid = int(context.args[1])
+    except (ValueError, IndexError):
+        await update.message.reply_text("Use: /shopproductcategory PRODUCT_ID CATEGORY_ID"); return
+    con = db()
+    try:
+        category = con.execute("SELECT name FROM shop_categories WHERE id=? AND is_active=1", (cid,)).fetchone()
+        product = con.execute("SELECT id FROM digital_products WHERE id=?", (pid,)).fetchone()
+        if not category or not product:
+            await update.message.reply_text("Product ya active category nahi mili."); return
+        con.execute("UPDATE digital_products SET category_id=? WHERE id=?", (str(cid), pid))
+        _audit(con, update.effective_user.id, "product_category", f"{pid}:{cid}"); con.commit()
+        await update.message.reply_text(f"✅ Product #{pid} category set: {html.escape(category['name'])}")
+    finally: con.close()
+
+
+async def stock_waitlist_command(update, context):
+    try: pid = int(context.args[0])
+    except (ValueError, IndexError):
+        await update.message.reply_text("Use: /shopwaitlist PRODUCT_ID"); return
+    con = db()
+    try:
+        product = con.execute("SELECT name,stock_count,is_active FROM digital_products WHERE id=?", (pid,)).fetchone()
+        if not product or not product["is_active"]:
+            await update.message.reply_text("Product nahi mila."); return
+        if product["stock_count"] > 0:
+            await update.message.reply_text("Product abhi in-stock hai. /shopsearch se order karein."); return
+        con.execute("INSERT OR IGNORE INTO shop_stock_waitlist(user_id,product_id) VALUES(?,?)",
+                    (update.effective_user.id, pid)); con.commit()
+        await update.message.reply_text("🔔 Waitlist mein add kar diya. Stock aane par notification milega.")
+    finally: con.close()
+
+
+async def admin_restock_command(update, context):
+    if not _admin(update): return
+    try: pid = int(context.args[0]); qty = int(context.args[1])
+    except (ValueError, IndexError):
+        await update.message.reply_text("Use: /shoprestock PRODUCT_ID QUANTITY"); return
+    if qty < 1 or qty > 100000:
+        await update.message.reply_text("Quantity 1–100000 ke beech honi chahiye."); return
+    con = db()
+    try:
+        product = con.execute("SELECT name FROM digital_products WHERE id=? AND is_active=1", (pid,)).fetchone()
+        if not product:
+            await update.message.reply_text("Active product nahi mila."); return
+        con.execute("UPDATE digital_products SET stock_count=stock_count+? WHERE id=?", (qty, pid))
+        users = con.execute("SELECT user_id FROM shop_stock_waitlist WHERE product_id=?", (pid,)).fetchall()
+        con.execute("DELETE FROM shop_stock_waitlist WHERE product_id=?", (pid,))
+        _audit(con, update.effective_user.id, "product_restock", f"{pid}:{qty}")
+        con.commit()
+    finally: con.close()
+    sent = 0
+    for row in users:
+        try:
+            await context.bot.send_message(row["user_id"], f"🔔 <b>Back in stock!</b>\n{html.escape(product['name'])} is available again. Use /shopsearch to find it.", parse_mode=ParseMode.HTML)
+            sent += 1
+        except Exception: log.warning("Restock notification failed for user %s", row["user_id"])
+    await update.message.reply_text(f"✅ Stock +{qty}. Waitlist notifications sent: {sent}/{len(users)}")
+
+
+async def admin_custom_command_add(update, context):
+    if not _admin(update): return
+    raw = " ".join(context.args or [])
+    if "|" not in raw:
+        await update.message.reply_text("Use: /shopcommandadd trigger|response (example: help|Contact support)"); return
+    trigger, response = [x.strip() for x in raw.split("|", 1)]
+    trigger = trigger.lstrip("/").lower()
+    if not trigger.replace("_", "").isalnum() or not response:
+        await update.message.reply_text("Trigger simple letters/numbers/underscore aur response required."); return
+    con = db()
+    try:
+        con.execute("INSERT INTO shop_custom_commands(trigger,response) VALUES(?,?) ON CONFLICT(trigger) DO UPDATE SET response=excluded.response,is_active=1",
+                    (trigger[:32], response[:3000]))
+        _audit(con, update.effective_user.id, "custom_command_set", trigger[:32]); con.commit()
+    finally: con.close()
+    await update.message.reply_text(f"✅ /{trigger} custom reply enabled.")
+
+
+async def custom_command_router(update, context):
+    msg = update.effective_message
+    if not msg or not msg.text or not msg.text.startswith("/"): return
+    trigger = msg.text.split()[0].split("@", 1)[0].lstrip("/").lower()
+    if not trigger or trigger in {"start", "help", "shop", "admin", "cancel"}: return
+    con = db()
+    try:
+        row = con.execute("SELECT response FROM shop_custom_commands WHERE trigger=? AND is_active=1", (trigger,)).fetchone()
+    finally: con.close()
+    if row:
+        await msg.reply_text(row["response"])
+
+
