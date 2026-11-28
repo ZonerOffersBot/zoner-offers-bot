@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import bot
 import runner
 import shop_features
+import advanced_shop_features
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter
@@ -19,6 +20,7 @@ _original_init_db = bot.init_db
 def _zoner_init_db_with_shop():
     _original_init_db()
     shop_features.init_db(bot.DB_FILE)
+    advanced_shop_features.init_db(bot.DB_FILE)
 
 bot.init_db = _zoner_init_db_with_shop
 _zoner_admin_menu = bot.admin_menu
@@ -418,6 +420,7 @@ _original_build_app = runner.build_app
 def build_app():
     app = _original_build_app()
     shop_features.install(app)
+    advanced_shop_features.install(app)
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, instamart_order_input), group=0)
     return app
